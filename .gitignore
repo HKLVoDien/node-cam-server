@@ -1,3 +1,6 @@
 node_modules/
 key.pem
 cert.pem
+.token
+config.json
+config.json.tmp
