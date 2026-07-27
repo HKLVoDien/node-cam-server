@@ -1,1343 +1,711 @@
+<!--
+  Mission: Mô tả kiến trúc *hiện tại* của FaceCam Server — module, luồng signaling,
+    use-case, rủi ro còn lại. Lịch sử "đã sửa gì, vì sao" nằm ở FINDINGS-2026-07-27.md.
+  Author: DienJVo
+  Version: 2.0.0
+-->
+
 # FaceCam Server — Architecture Audit
 
-> **Auditor:** Principal Engineer Review  
-> **Date:** 2026-06-22  
-> **Scope:** Full codebase — `server.js`, `init.js`, `public/` (3 HTML/JS files), `config.json`  
-> **Style:** Production-grade audit — no summaries, full execution trace
+> **Phiên bản tài liệu:** 2.0 · **Cập nhật:** 2026-07-27
+> **Phạm vi:** `server.js`, `init.js`, `public/` (4 trang + `shared.js`)
+> **Phản ánh code tại thời điểm:** sau đợt rà soát 2026-07-27
+
+**Lịch sử tài liệu**
+- **v2.0 (2026-07-27)** — viết lại theo code hiện tại: protocol signaling đã đổi sang định tuyến đích danh, thêm lớp xác thực, hỗ trợ nhiều viewer. Xem [FINDINGS-2026-07-27.md](FINDINGS-2026-07-27.md) để biết chi tiết từng thay đổi.
+- **v1.0 (2026-06-22)** — bản gốc. Phần lớn rủi ro nêu trong đó đã được xử lý; các mục Risk/Refactor của bản cũ không còn áp dụng.
 
 ---
 
-## Table of Contents
+## Mục lục
 
-1. [Project Overview](#1-project-overview)
-2. [File & Module Inventory](#2-file--module-inventory)
-3. [Architecture Style Classification](#3-architecture-style-classification)
-4. [Dependency Graph](#4-dependency-graph)
-5. [Feature-by-Feature Breakdown](#5-feature-by-feature-breakdown)
-   - 5.1 [Server Boot & HTTPS Initialization](#51-server-boot--https-initialization)
-   - 5.2 [QR Code Generation & URL API](#52-qr-code-generation--url-api)
-   - 5.3 [Config Read/Write API](#53-config-readwrite-api)
-   - 5.4 [WebRTC Signaling (Offer/Answer/ICE)](#54-webrtc-signaling-offeranswerice)
-   - 5.5 [Phone Camera Stream](#55-phone-camera-stream)
-   - 5.6 [Viewer (PC) Receive Stream](#56-viewer-pc-receive-stream)
-   - 5.7 [Quick Bar & Config Sync](#57-quick-bar--config-sync)
-   - 5.8 [Cross-Server Bridge (HTTP↔HTTPS)](#58-cross-server-bridge-httphttps)
-   - 5.9 [Phone Disconnect Notification](#59-phone-disconnect-notification)
-   - 5.10 [Viewer Keep-Alive](#510-viewer-keep-alive)
-   - 5.11 [Init & Setup Script](#511-init--setup-script)
-6. [Use-Case Catalog](#6-use-case-catalog)
-7. [System Flow Diagrams](#7-system-flow-diagrams)
-   - 7.1 [Full WebRTC Signaling Flow](#71-full-webrtc-signaling-flow)
-   - 7.2 [Config Update Flow](#72-config-update-flow)
-   - 7.3 [Server Boot Flow](#73-server-boot-flow)
-   - 7.4 [Component Dependency Graph](#74-component-dependency-graph)
-8. [Risk Analysis](#8-risk-analysis)
-   - 8.1 [Race Conditions](#81-race-conditions)
-   - 8.2 [Concurrency Risks](#82-concurrency-risks)
-   - 8.3 [Memory Leak Risks](#83-memory-leak-risks)
-   - 8.4 [Security Issues](#84-security-issues)
-   - 8.5 [Scalability Bottlenecks](#85-scalability-bottlenecks)
-9. [Code Quality Analysis](#9-code-quality-analysis)
-   - 9.1 [Dead Code](#91-dead-code)
-   - 9.2 [Duplicated Logic](#92-duplicated-logic)
-   - 9.3 [God Objects](#93-god-objects)
-   - 9.4 [Business Logic Leakage](#94-business-logic-leakage)
-   - 9.5 [Missing Boundaries](#95-missing-boundaries)
-10. [Architecture Quality Scores](#10-architecture-quality-scores)
-11. [Refactor Recommendations](#11-refactor-recommendations)
-12. [Final Verdict](#12-final-verdict)
+1. [Tổng quan](#1-tổng-quan)
+2. [Danh mục file & module](#2-danh-mục-file--module)
+3. [Phân loại kiến trúc](#3-phân-loại-kiến-trúc)
+4. [Đồ thị phụ thuộc](#4-đồ-thị-phụ-thuộc)
+5. [Phân tích theo tính năng](#5-phân-tích-theo-tính-năng)
+6. [Danh mục use-case](#6-danh-mục-use-case)
+7. [Sơ đồ luồng](#7-sơ-đồ-luồng)
+8. [Phân tích rủi ro](#8-phân-tích-rủi-ro)
+9. [Chất lượng code](#9-chất-lượng-code)
+10. [Điểm chất lượng kiến trúc](#10-điểm-chất-lượng-kiến-trúc)
+11. [Khuyến nghị còn lại](#11-khuyến-nghị-còn-lại)
+12. [Kết luận](#12-kết-luận)
 
 ---
 
-## 1. Project Overview
+## 1. Tổng quan
 
-FaceCam Server is a **real-time video streaming relay** that turns a mobile phone into a webcam via WebRTC. The architecture is intentionally minimal: a Node.js signaling server bridges the WebRTC handshake between a phone (sender) and a PC browser/OBS (receiver). Actual video data travels **peer-to-peer** — never through the Node.js process.
+FaceCam Server biến điện thoại thành webcam qua WebRTC. Node.js **chỉ làm signaling** (trao đổi SDP/ICE); video đi **P2P trực tiếp** giữa phone và PC, không bao giờ qua tiến trình Node.
 
-**Technology stack:**
-| Layer | Technology |
+**Stack:**
+
+| Tầng | Công nghệ |
 |---|---|
-| Runtime | Node.js 16+ |
-| HTTP Framework | Express 5.x |
-| Real-time | Socket.IO 4.x (over both HTTP and HTTPS) |
-| Transport | WebRTC (browser-native, P2P) |
-| TLS | Self-signed cert via OpenSSL |
-| QR | `qrcode` npm package |
-| Frontend | Vanilla JS, no build step |
-| Config | JSON file on disk |
-| Database | None |
-| Auth | None |
-| Queue | None |
-| Cache | None |
+| Runtime | Node.js ≥ 18 (`engines`) |
+| HTTP | Express 5.x |
+| Realtime | Socket.IO 4.x — chạy song song trên cả HTTP và HTTPS |
+| Truyền video | WebRTC P2P (API sẵn của trình duyệt) |
+| TLS | Self-signed cert sinh bởi OpenSSL, có SAN |
+| Xác thực | Token 32-hex lưu file `.token`; localhost được miễn |
+| QR | gói npm `qrcode` |
+| Frontend | Vanilla JS, không build step |
+| Config | File JSON trên đĩa + cache trong RAM |
+| Database / Queue / Cache | Không có |
+
+**Ràng buộc thiết kế cố ý:**
+- `iceServers: []` — không STUN/TURN. Chỉ ghép được bằng host candidate → **phone và PC phải cùng subnet**. Đổi lại: không phụ thuộc dịch vụ ngoài, không rò rỉ IP.
+- Một phòng duy nhất, hardcode `'facecam'` — phục vụ một phiên stream tại một thời điểm.
+- Không database — config là một file JSON.
 
 ---
 
-## 2. File & Module Inventory
+## 2. Danh mục file & module
 
 ```
-facecamserver/
-├── server.js           ← Single-file backend: HTTP, HTTPS, Socket.IO, Express routes, signaling logic
-├── init.js             ← One-time setup CLI: npm install, OpenSSL cert generation, config.json creation, ADB check
-├── package.json        ← Dependencies: express, qrcode, socket.io
-├── config.json         ← Mutable runtime config: flipH, flipV, rotation, hideControls, phone camera settings
-├── cert.pem            ← Self-signed TLS cert (gitignored, generated by init.js)
-├── key.pem             ← TLS private key (gitignored, generated by init.js)
+node-cam-server/
+├── server.js              ← backend một file: HTTP, HTTPS, auth, Socket.IO, REST, signaling
+├── init.js                ← CLI setup: npm install, sinh cert có SAN, dò ADB
+├── package.json
+├── config.json            ← config runtime (gitignored, server tự tạo khi thiếu)
+├── .token                 ← token xác thực (gitignored, bền qua restart)
+├── cert.pem / key.pem     ← TLS self-signed (gitignored, sinh bởi init.js)
+├── docs/
+│   ├── ARCHITECTURE_AUDIT.md    ← tài liệu này — kiến trúc hiện tại
+│   └── FINDINGS-2026-07-27.md   ← nhật ký rà soát & sửa lỗi
 └── public/
-    ├── index.html      ← PC dashboard: shows QR codes for USB/WiFi modes
-    ├── phone.html      ← Mobile sender: getUserMedia → WebRTC offer → stream
-    └── viewer.html     ← PC receiver: WebRTC answer → <video> display → OBS source
+    ├── shared.js          ← hằng số signaling + helper config, dùng chung server ↔ client
+    ├── index.html         ← dashboard PC: QR USB/WiFi, chọn IP khi nhiều card mạng
+    ├── phone.html         ← sender: getUserMedia → nhiều WebRTC offer
+    ├── viewer.html        ← receiver: answer → <video> → nguồn cho OBS
+    └── control.html       ← bảng điều khiển config, mở được trên điện thoại
 ```
 
-**Line counts (excluding node_modules):**
+**Số dòng:**
 
-| File | Lines | Responsibility |
-|---|---|---|
-| `server.js` | 146 | Everything backend |
-| `init.js` | 110 | One-time setup |
-| `public/index.html` | ~100 | QR dashboard |
-| `public/phone.html` | ~320 | Mobile camera UI + WebRTC sender |
-| `public/viewer.html` | ~188 | PC receiver UI + WebRTC answer |
+| File | Dòng | Trong đó JS | Trách nhiệm |
+|---|---|---|---|
+| `server.js` | 414 | 414 | Toàn bộ backend |
+| `init.js` | 151 | 151 | Setup một lần |
+| `public/shared.js` | 53 | 53 | Hằng số + helper dùng chung |
+| `public/phone.html` | 835 | 375 | UI camera + WebRTC sender đa peer |
+| `public/viewer.html` | 354 | 244 | UI receiver + stats |
+| `public/control.html` | 295 | 102 | Bảng config |
+| `public/index.html` | 281 | 34 | Dashboard QR |
+
+### `public/shared.js` — nguồn duy nhất cho protocol
+
+Viết theo UMD tối giản nên **cả hai phía cùng dùng một định nghĩa**:
+
+```js
+// server.js
+const { ROLE, EV } = require('./public/shared.js')
+
+// client
+<script src="/shared.js"></script>
+const { ROOM, ROLE, EV, RTC_CONFIG, fetchConfig, saveConfig } = FaceCam
+```
+
+Xuất ra: `ROOM`, `ROLE` (`phone`/`viewer`/`control`), `EV` (9 tên event), `RTC_CONFIG`, `fetchConfig()`, `saveConfig()`.
 
 ---
 
-## 3. Architecture Style Classification
+## 3. Phân loại kiến trúc
 
-### Classification: **Monolithic Single-File + Flat Client Scripts**
+### Phân loại: **Monolith một file + client script phẳng**
 
-This is not Clean Architecture, Hexagonal, or CQRS. It is a **pragmatic single-concern relay server** — appropriate for its scope. The architecture can be described as:
+Đây không phải Clean Architecture hay Hexagonal, mà là **relay server một mối quan tâm** — phù hợp với quy mô.
 
 ```
-┌─────────────────────────────────────────────┐
-│              server.js (monolith)           │
-│                                             │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  │
-│  │  Express │  │ Socket.IO│  │  Config  │  │
-│  │  Routes  │  │ Signaling│  │  R/W     │  │
-│  └──────────┘  └──────────┘  └──────────┘  │
-│        ↓               ↓            ↓       │
-│  ┌──────────────────────────────────────┐   │
-│  │       Node.js HTTP/HTTPS Servers     │   │
-│  └──────────────────────────────────────┘   │
-└─────────────────────────────────────────────┘
-         ↕ Socket.IO events          ↕ REST
-┌────────────────┐          ┌─────────────────┐
-│  phone.html    │          │   viewer.html   │
-│  (WebRTC send) │◄────────►│  (WebRTC recv)  │
-└────────────────┘  P2P     └─────────────────┘
+┌──────────────────────────────────────────────────────┐
+│                  server.js (monolith)                │
+│                                                      │
+│  ┌────────┐ ┌────────┐ ┌──────────┐ ┌────────────┐  │
+│  │  Auth  │ │ Express│ │Socket.IO │ │   Config   │  │
+│  │ (token)│ │ Routes │ │Signaling │ │ cache + I/O│  │
+│  └────────┘ └────────┘ └──────────┘ └────────────┘  │
+│       ↓          ↓           ↓             ↓         │
+│  ┌────────────────────────────────────────────────┐ │
+│  │      Node HTTP :7070  +  HTTPS :7443           │ │
+│  └────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────┘
+       ↕ Socket.IO          ↕ REST        ↕ static
+┌──────────────┐   ┌──────────────┐   ┌──────────────┐
+│  phone.html  │   │ viewer.html  │   │ control.html │
+│  N peer conn │◄─►│  1 peer conn │   │  config UI   │
+└──────────────┘P2P└──────────────┘   └──────────────┘
 ```
 
-**Dependency direction:**
-- `server.js` depends on: `express`, `socket.io`, `qrcode`, `fs`, `https`, `http`, `os`
-- `phone.html` depends on: `/socket.io/socket.io.js` (served by server), browser WebRTC APIs
-- `viewer.html` depends on: `/socket.io/socket.io.js`, browser WebRTC APIs
-- `index.html` depends on: `/api/urls` REST endpoint
+**Hướng phụ thuộc:** `server.js` → `express`, `socket.io`, `qrcode`, `crypto`, `fs`, `os`, `./public/shared.js`. Các client → `/socket.io/socket.io.js`, `/shared.js`, WebRTC API. Không có phụ thuộc vòng.
 
-There are **no circular dependencies** in the server code. The clients are intentionally decoupled from each other — they only communicate via the server's Socket.IO relay.
+### Vi phạm kiến trúc còn lại
 
-### Architecture Violations
-
-| Violation | Location | Severity |
-|---|---|---|
-| No separation of concerns in `server.js` | All logic in one file | Low (acceptable at this scale) |
-| `setupSignaling` mutates peer reference via closure | `server.js:57` | Medium |
-| Config I/O (filesystem) directly in Express route handlers | `server.js:31-39` | Medium |
-| No input validation on `/api/config` POST body | `server.js:34-38` | High |
-| Business logic (who gets `request_stream`) hardcoded in signaling | `server.js:87-91` | Low |
-| `viewer.html` re-implements `setStatus` differently from `phone.html` | Both clients | Low |
+| Vi phạm | Vị trí | Mức độ | Ghi chú |
+|---|---|---|---|
+| Không tách concern trong `server.js` | Toàn file | Thấp | Chấp nhận được ở 414 dòng |
+| `setupSignaling` giữ tham chiếu `peer` qua closure | `server.js` | Thấp | Vòng đời = vòng đời tiến trình |
+| I/O config nằm thẳng trong route handler | `server.js` | Thấp | Đã có cache RAM + ghi atomic bất đồng bộ |
+| Tên phòng `'facecam'` hardcode | `shared.js` | Thấp | Nhưng đã về **một** nguồn duy nhất |
+| Ba trang client tự implement UI trạng thái riêng | `public/*.html` | Thấp | Cố ý — mỗi trang một dạng UI khác nhau |
 
 ---
 
-## 4. Dependency Graph
+## 4. Đồ thị phụ thuộc
 
 ```mermaid
 graph TD
     subgraph Server["server.js"]
-        A[Express App] --> B[HTTP Server :7070]
-        A --> C[HTTPS Server :7443]
-        B --> D[httpIO - Socket.IO]
-        C --> E[httpsIO - Socket.IO]
-        D <-->|bridge peer ref| E
-        A --> F[GET /api/config]
-        A --> G[POST /api/config]
-        A --> H[GET /api/urls]
-        A --> I[Static /public]
-        F --> J[config.json read]
-        G --> K[config.json write]
-        H --> L[QRCode.toDataURL]
-        H --> M[getLocalIP]
+        SH[shared.js<br/>ROOM · ROLE · EV] --> SIG
+        AUTH[Auth middleware<br/>token + cookie] --> ST[express.static]
+        AUTH --> API
+        GS[guardSocket<br/>io.use] --> SIG[setupSignaling<br/>relay + sendTo]
+        API[REST: /api/config · /api/urls]
+        API --> CC[configCache RAM]
+        CC --> PC[persistConfig<br/>tmp + rename, tuần tự]
+        API --> QR[QRCode]
+        API --> NET[listLocalIPs<br/>lọc card ảo]
+        SIG --> IOH[Socket.IO HTTP :7070]
+        SIG --> IOS[Socket.IO HTTPS :7443]
+        IOH <-->|bridge peer| IOS
     end
 
     subgraph Clients
-        N[index.html] -->|fetch /api/urls| H
-        O[phone.html] -->|socket.io| D
-        O -->|socket.io| E
-        P[viewer.html] -->|socket.io| D
-        P -->|socket.io| E
-        O <-->|WebRTC P2P, NOT through server| P
-    end
-
-    subgraph Init["init.js"]
-        Q[npm install check]
-        R[openssl cert gen]
-        S[config.json create]
-        T[ADB detect]
+        IDX[index.html] -->|GET /api/urls| API
+        CTL[control.html] -->|GET/POST /api/config| API
+        CTL -->|socket| IOH
+        PH[phone.html] -->|socket| IOS
+        PH -->|getUserMedia| CAM[📷 Camera]
+        VW[viewer.html] -->|socket| IOH
+        SH -.dùng chung.-> PH
+        SH -.dùng chung.-> VW
+        SH -.dùng chung.-> CTL
+        PH <==>|WebRTC P2P<br/>không qua server| VW
     end
 ```
 
 ---
 
-## 5. Feature-by-Feature Breakdown
+## 5. Phân tích theo tính năng
+
+### 5.1 Khởi động server
+
+`node server.js` → chạy tuần tự từ trên xuống:
+
+1. Đọc port từ `PORT` / `HTTPS_PORT`, mặc định 7070 / 7443.
+2. Nạp hoặc sinh token (`.token`). Token hỏng định dạng → cảnh báo + sinh mới.
+3. Đăng ký **auth middleware trước `express.static`** — thứ tự này bắt buộc, đặt sau thì static đã phục vụ file xong trước khi kiểm tra.
+4. Nạp `config.json` với merge sâu 1 cấp; thiếu file hoặc JSON hỏng → dựng lại từ `DEFAULT_CONFIG`.
+5. Tạo HTTP server + `httpIO`, gắn `guardSocket`.
+6. Thử tạo HTTPS server. Đọc được cert → gắn `guardSocket`, gọi `setupSignaling` hai chiều (bridge). Không đọc được → chỉ HTTP, không bridge.
+7. Đăng ký handler `SIGINT`/`SIGTERM`.
+
+**Xử lý lỗi:**
+- Port bận: `server.on('error')` — HTTP thì in hướng dẫn theo OS rồi thoát; HTTPS thì cảnh báo và chạy tiếp (USB mode vẫn dùng được).
+- Thiếu cert (`ENOENT`): thông báo bình thường. Lỗi khác (key hỏng, sai quyền) được báo riêng.
 
 ---
 
-### 5.1 Server Boot & HTTPS Initialization
+### 5.2 Xác thực
 
-**Entry point:** `node server.js` → top-level execution
-
-**Execution trace:**
+Hai lớp, cùng một token:
 
 ```js
-// server.js:1-13 — imports
-const http = require('http')
-const https = require('https')
-const fs = require('fs')
-// ...
-
-// server.js:10 — express app created (no middleware order issues at this scale)
-const app = express()
-
-// server.js:25-26 — middleware
-app.use(express.static(path.join(__dirname, 'public')))  // serves index/phone/viewer HTML
-app.use(express.json())                                   // parses POST body
-
-// server.js:110-111 — HTTP server
-const httpServer = http.createServer(app)
-const httpIO = new Server(httpServer)          // Socket.IO attached
-let httpsIO = null                             // may remain null if cert missing
-
-// server.js:114-120 — HTTP listen
-httpServer.listen(HTTP_PORT, '0.0.0.0', async () => {
-  // generates QR string for terminal
-  const qr = await QRCode.toString(usbURL, { type: 'terminal', small: true })
-  console.log(...)
+// Lớp HTTP — trước static
+app.use((req, res, next) => {
+  if (isLocalAddress(req.socket.remoteAddress)) return next()
+  if (req.query.t === TOKEN) { /* set cookie */ return next() }
+  if (readCookie(req.headers.cookie, 'fc_token') === TOKEN) return next()
+  res.status(401).send(...)
 })
 
-// server.js:123-143 — HTTPS try/catch
-try {
-  const httpsServer = https.createServer({
-    key: fs.readFileSync(path.join(__dirname, 'key.pem')),   // throws if missing
-    cert: fs.readFileSync(path.join(__dirname, 'cert.pem')), // throws if missing
-  }, app)
-  httpsIO = new Server(httpsServer)
-  setupSignaling(httpsIO, httpIO, 'HTTPS')   // bridge: httpsIO ↔ httpIO
-  setupSignaling(httpIO, httpsIO, 'HTTP')    // bridge: httpIO ↔ httpsIO
-  httpsServer.listen(HTTPS_PORT, ...)
-} catch {
-  // cert missing — only HTTP signaling
-  setupSignaling(httpIO, null, 'HTTP')
-}
-```
-
-**Key design decision:** Both servers share the same Express `app` instance. This means all REST routes (`/api/config`, `/api/urls`) are available on both ports 7070 and 7443. This is intentional — phone on HTTPS needs to POST config updates.
-
-**Failure cases:**
-- `cert.pem` / `key.pem` missing → caught silently, HTTPS disabled, only HTTP mode available
-- Port 7070 or 7443 already in use → uncaught `EADDRINUSE` crashes process
-
-**Missing:** No `process.on('uncaughtException')` handler. No graceful shutdown (`SIGTERM`). No port conflict detection.
-
----
-
-### 5.2 QR Code Generation & URL API
-
-**Entry point:** `GET /api/urls` → `server.js:42-53`
-
-**Execution trace:**
-
-```js
-app.get('/api/urls', async (req, res) => {
-  const ip = getLocalIP()                    // server.js:15-22 — iterates os.networkInterfaces()
-  const usbURL = `http://localhost:${HTTP_PORT}/phone.html`
-  const wifiURL = `https://${ip}:${HTTPS_PORT}/phone.html`
-
-  const [usbQR, wifiQR] = await Promise.all([
-    QRCode.toDataURL(usbURL),                // base64 PNG data URI
-    QRCode.toDataURL(wifiURL),
-  ])
-
-  res.json({ usbURL, wifiURL, usbQR, wifiQR, ip })
-})
-```
-
-**`getLocalIP()` trace — `server.js:15-23`:**
-```js
-function getLocalIP() {
-  const interfaces = os.networkInterfaces()
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name]) {
-      if (iface.family === 'IPv4' && !iface.internal) return iface.address  // returns FIRST non-loopback IPv4
-    }
-  }
-  return 'localhost'
-}
-```
-
-**Issue:** Returns the first non-loopback IPv4 encountered. On machines with multiple network interfaces (VPN, Docker bridge, virtual adapters), this will return the wrong IP. No filtering for common false positives like `172.x.x.x` (Docker) or `10.x.x.x` VPN ranges.
-
-**Consumer:** `index.html` calls `fetch('/api/urls')` on page load and injects QR images into the DOM.
-
-**Error handling:** None. If `QRCode.toDataURL` throws, the async handler rejects without sending a response — Express 5.x auto-catches async errors and sends 500, but no user-facing message.
-
----
-
-### 5.3 Config Read/Write API
-
-**Entry point:** `GET /api/config` and `POST /api/config` — `server.js:30-39`
-
-**Read trace:**
-```js
-// server.js:30-32
-app.get('/api/config', (req, res) => {
-  res.json(JSON.parse(fs.readFileSync(CONFIG_PATH)))  // synchronous disk read on every request
-})
-```
-
-**Write trace:**
-```js
-// server.js:34-39
-app.post('/api/config', (req, res) => {
-  const current = JSON.parse(fs.readFileSync(CONFIG_PATH))   // sync read
-  const updated = { ...current, ...req.body }                 // shallow merge
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(updated, null, 2))  // sync write
-  res.json(updated)
-})
-```
-
-**Consumers:**
-- `phone.html`: reads on load, writes on save settings, writes on each quick bar action (flipH, flipV, rotate)
-- `viewer.html`: reads on load, writes on flipH/flipV/rotate button clicks, writes on hide/show controls
-- `index.html`: does not read config
-
-**Business rules encoded in shallow merge:**
-- `POST /api/config` with `{ flipH: true }` preserves all other keys
-- `POST /api/config` with `{ phone: { width: 1920 } }` **replaces entire `phone` object** (not deep merge) — this is a bug if caller only wants to update one phone field
-
-**Validation:** None. Any JSON body is accepted. Possible attacks:
-```js
-// Malicious POST body — accepted without error:
-{ "__proto__": { "polluted": true } }   // prototype pollution via JSON.parse + spread
-{ "flipH": "DROP TABLE users" }         // no type coercion guard (harmless here but bad pattern)
-```
-
-**Concurrency issue:** Two simultaneous POST requests:
-1. Request A reads config → gets `{flipH: false}`
-2. Request B reads config → gets `{flipH: false}`
-3. Request A writes `{flipH: true}`
-4. Request B writes `{flipV: true}` using its stale read → **overwrites A's change**
-
-This is a classic **read-modify-write race condition** on the filesystem. Low probability in practice (single user), but worth noting.
-
-**Performance:** `fs.readFileSync` and `fs.writeFileSync` are blocking — they block the Node.js event loop. For a config file of <1KB this is negligible, but it violates Node.js async best practices.
-
----
-
-### 5.4 WebRTC Signaling (Offer/Answer/ICE)
-
-**Entry point:** `setupSignaling(io, peer, label)` — `server.js:57-107`
-
-This is the core of the system. The function registers Socket.IO event handlers on a given `io` instance and optionally bridges to a `peer` IO instance.
-
-**Full handler trace:**
-
-```js
-function setupSignaling(io, peer, label) {
-  io.on('connection', (socket) => {
-
-    // JOIN — server.js:61-67
-    socket.on('join', (room) => {
-      socket.join(room)                                    // joins Socket.IO room
-      const members = io.sockets.adapter.rooms.get(room)?.size ?? 0
-      socket.to(room).emit('request_stream')              // notify existing members
-      peer?.to(room).emit('request_stream')               // notify members on peer server
-    })
-
-    // OFFER — server.js:70-74
-    socket.on('offer', (data) => {
-      socket.to(data.room).emit('offer', data)            // relay to room (same server)
-      peer?.to(data.room).emit('offer', data)             // relay to room (other server)
-    })
-
-    // ANSWER — server.js:76-80
-    socket.on('answer', (data) => {
-      socket.to(data.room).emit('answer', data)
-      peer?.to(data.room).emit('answer', data)
-    })
-
-    // ICE — server.js:82-85
-    socket.on('ice', (data) => {
-      socket.to(data.room).emit('ice', data)
-      peer?.to(data.room).emit('ice', data)
-    })
-
-    // REQUEST_STREAM — server.js:87-91
-    socket.on('request_stream', () => {
-      socket.to('facecam').emit('request_stream')         // hardcoded room name 'facecam'
-      peer?.to('facecam').emit('request_stream')
-    })
-
-    // CONFIG_UPDATED — server.js:93-97
-    socket.on('config_updated', () => {
-      socket.to('facecam').emit('config_updated')
-      peer?.to('facecam').emit('config_updated')
-    })
-
-    // DISCONNECT — server.js:99-106
-    socket.on('disconnect', (reason) => {
-      peer?.to('facecam').emit('phone_disconnected')
-      io.to('facecam').emit('phone_disconnected')         // notifies ALL sockets in room
-    })
+// Lớp Socket.IO — chặn HTTP mà hở socket thì vô nghĩa
+function guardSocket(io) {
+  io.use((socket, next) => {
+    if (isLocalAddress(socket.handshake.address)) return next()
+    if (readCookie(socket.handshake.headers.cookie, 'fc_token') === TOKEN) return next()
+    if (socket.handshake.auth?.token === TOKEN) return next()
+    next(new Error('unauthorized'))
   })
 }
 ```
 
-**Call sites:**
-```js
-// server.js:129-130 (HTTPS cert found)
-setupSignaling(httpsIO, httpIO, 'HTTPS')   // httpsIO events bridge → httpIO
-setupSignaling(httpIO, httpsIO, 'HTTP')    // httpIO events bridge → httpsIO
+**Quy tắc:** `127.0.0.1` / `::1` được miễn — bao gồm viewer trên PC, OBS, và **USB mode** (`adb reverse` khiến request đến dưới dạng localhost).
 
-// server.js:142 (cert missing)
-setupSignaling(httpIO, null, 'HTTP')       // no bridge
-```
+**Vì sao gác signaling là đủ:** video đi P2P, nhưng không trao đổi được SDP/ICE thì không dựng được kết nối nào.
 
-**Room topology:** All signaling uses a single hardcoded room: `'facecam'`. This means:
-- Only one phone + one viewer can sensibly coexist
-- A second phone connecting would interfere with the WebRTC negotiation
-- Multiple viewers would all receive offers simultaneously — each creating a separate `RTCPeerConnection` — only one will successfully answer first, others will be in broken state
+**Vòng đời token:** sinh lần đầu, lưu `.token`, **giữ nguyên qua restart** — nếu không thì URL trong OBS Browser Source hỏng mỗi lần khởi động lại. Đổi token = xoá file `.token`.
 
 ---
 
-### 5.5 Phone Camera Stream
+### 5.3 API config
 
-**Entry point:** User taps "Bật Camera" button in `phone.html`
+`configCache` trong RAM là nguồn sự thật; đĩa chỉ để bền vững.
 
-**Execution trace:**
+**Đọc:** `GET /api/config` → trả thẳng cache, không chạm đĩa.
 
-```js
-// phone.html — startBtn click handler
-document.getElementById('startBtn').addEventListener('click', async () => {
-  await getCameras()     // enumerateDevices → populates camSelect dropdown
-  await startStream()    // getUserMedia → localStream
-  // show UI
-})
+**Ghi:** `POST /api/config` → `sanitizeConfig()` → merge vào cache → `persistConfig()` bất đồng bộ.
 
-// getCameras()
-async function getCameras() {
-  const devices = await navigator.mediaDevices.enumerateDevices()
-  const cams = devices.filter(d => d.kind === 'videoinput')
-  // builds <option> elements with emoji tags for front/back detection
-}
+`sanitizeConfig()` kiểm **từng field** theo kiểu và miền giá trị:
 
-// startStream(deviceId?)
-async function startStream(deviceId) {
-  if (localStream) localStream.getTracks().forEach(t => t.stop())  // stop previous stream
-  const constraints = {
-    video: deviceId
-      ? { deviceId: { exact: deviceId }, width: { ideal: phoneCfg.width }, ... }
-      : { facingMode, width: { ideal: phoneCfg.width }, ... },
-    audio: false
-  }
-  localStream = await navigator.mediaDevices.getUserMedia(constraints)
-  preview.srcObject = localStream    // show preview
-  if (pc) {
-    const sender = pc.getSenders().find(s => s.track?.kind === 'video')
-    if (sender) sender.replaceTrack(localStream.getVideoTracks()[0])  // hot swap track
-  }
-}
-```
-
-**Trigger to send offer:**
-```js
-// phone.html
-socket.on('request_stream', async () => {
-  if (localStream) await createPeer()    // only if stream is active
-})
-
-async function createPeer() {
-  if (pc) { pc.close(); pc = null }
-  pc = new RTCPeerConnection({ iceServers: [] })    // NO STUN/TURN servers
-  localStream.getTracks().forEach(t => pc.addTrack(t, localStream))
-  pc.onicecandidate = ({ candidate }) => {
-    if (candidate) socket.emit('ice', { room: ROOM, candidate })
-  }
-  pc.onconnectionstatechange = () => { /* update status UI */ }
-  const offer = await pc.createOffer()
-  await pc.setLocalDescription(offer)
-  socket.emit('offer', { room: ROOM, sdp: offer })
-}
-```
-
-**`iceServers: []` implication:** No STUN or TURN servers configured. WebRTC ICE will only discover host candidates (LAN IPs and loopback). This is **correct and intentional** for a LAN-only tool — it avoids external dependencies and Google STUN server calls.
-
----
-
-### 5.6 Viewer (PC) Receive Stream
-
-**Entry point:** `viewer.html` page load → `socket.on('connect', requestStream)`
-
-**Execution trace:**
-
-```js
-// viewer.html
-function requestStream() {
-  socket.emit('join', ROOM)           // joins 'facecam' room
-  socket.emit('request_stream')       // asks phone to send offer
-}
-socket.on('connect', requestStream)   // fires on initial connect and reconnect
-
-// retry loop — in case phone not yet streaming
-socket.on('connect', () => {
-  retryTimer = setInterval(() => {
-    if (!video.srcObject || video.readyState === 0) {
-      socket.emit('request_stream')   // keeps asking every 5s until stream arrives
-    } else {
-      clearInterval(retryTimer)
-    }
-  }, 5000)
-})
-```
-
-**NOTE:** There are **two `socket.on('connect', ...)` handlers** registered. This is valid in Socket.IO (both fire), but the `retryTimer` from the first connect will leak if `connect` fires again (reconnect) — a new interval is created without clearing the old one. This is a **memory/timer leak on reconnection**.
-
-**Receiving the offer:**
-```js
-socket.on('offer', async ({ sdp }) => {
-  pc = new RTCPeerConnection({ iceServers: [] })
-
-  pc.ontrack = ({ streams }) => {
-    video.srcObject = streams[0]     // attach stream to <video> element
-    // update status UI
-  }
-
-  pc.onicecandidate = ({ candidate }) => {
-    if (candidate) socket.emit('ice', { room: ROOM, candidate })
-  }
-
-  await pc.setRemoteDescription(new RTCSessionDescription(sdp))
-  const answer = await pc.createAnswer()
-  await pc.setLocalDescription(answer)
-  socket.emit('answer', { room: ROOM, sdp: answer })
-})
-```
-
-**Issue:** Every time an `offer` is received, a **new `RTCPeerConnection` is created** without closing the previous one. If the phone reconnects multiple times, old `pc` objects accumulate in memory (no explicit `pc.close()` before reassignment on viewer side).
-
----
-
-### 5.7 Quick Bar & Config Sync
-
-**Entry point:** Quick bar buttons in `phone.html`
-
-**flipH example trace:**
-```js
-document.getElementById('qFlipH').addEventListener('click', function() {
-  cfg.flipH = !cfg.flipH
-  this.classList.toggle('active', cfg.flipH)
-  saveViewerCfg({ flipH: cfg.flipH })        // POST to /api/config + emit config_updated
-})
-
-function saveViewerCfg(patch) {
-  const updated = { ...cfg, ...patch }
-  cfg = updated
-  fetch('/api/config', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(updated)
-  })
-  socket.emit('config_updated')              // server relays to all room members
-}
-```
-
-**Viewer receives `config_updated`:**
-```js
-// viewer.html
-socket.on('config_updated', () => {
-  fetch('/api/config').then(r => r.json()).then(cfg => {
-    fH = cfg.flipH ?? false
-    fV = cfg.flipV ?? false
-    rot = cfg.rotation ?? 0
-    applyTransform()       // CSS transform on <video> element
-    // update button active states
-  })
-})
-```
-
-**Issue:** There is a **TOCTOU (time-of-check-time-of-use)** pattern here. The phone emits `config_updated` and the viewer fetches `/api/config` separately. If two config changes happen rapidly, the viewer's fetch might arrive out of order (HTTP response ordering is not guaranteed with multiple concurrent requests). The viewer could display stale config.
-
-**Better pattern:** Embed the full config object in the `config_updated` socket event payload, eliminating the secondary HTTP fetch.
-
----
-
-### 5.8 Cross-Server Bridge (HTTP↔HTTPS)
-
-**The bridge pattern — `server.js:57-107`:**
-
-When both servers are running, `setupSignaling` is called twice:
-```js
-setupSignaling(httpsIO, httpIO, 'HTTPS')   // httpsIO ← peer = httpIO
-setupSignaling(httpIO, httpsIO, 'HTTP')    // httpIO ← peer = httpsIO
-```
-
-Inside `setupSignaling`, `peer` is captured by closure. Every event on `httpsIO` is relayed to `httpIO`'s room, and vice versa.
-
-**Example: phone on HTTPS, viewer on HTTP:**
-```
-phone (HTTPS:7443) emits 'offer'
-→ httpsIO handler fires
-  → socket.to('facecam').emit('offer')     // to other HTTPS clients (none)
-  → peer.to('facecam').emit('offer')       // peer = httpIO → reaches viewer on HTTP:7070 ✓
-```
-
-**Race condition risk:** If phone and viewer are on the same server (both HTTP or both HTTPS), the offer is relayed **twice** — once via `socket.to()` and once via `peer.to()`. Since `peer.to()` references the OTHER server, and the viewer is not on that server, the duplicate relay goes to an empty room. This is harmless but wasteful.
-
-**Actual duplicate relay scenario:** If viewer happens to be connected on BOTH HTTP and HTTPS (e.g., index.html loaded twice), it would receive the same `offer` twice and create two peer connections.
-
----
-
-### 5.9 Phone Disconnect Notification
-
-**`server.js:99-106`:**
-```js
-socket.on('disconnect', (reason) => {
-  const rooms = [...socket.rooms].join(', ') || 'none'
-  console.log(`[${label}] DISCONNECT ${socket.id} | reason: ${reason} | rooms: ${rooms}`)
-  peer?.to('facecam').emit('phone_disconnected')   // to OTHER server's room
-  io.to('facecam').emit('phone_disconnected')      // to THIS server's room
-})
-```
-
-**Problem:** The disconnect handler fires for **ALL** disconnecting sockets — whether it's the phone, the viewer, or any other client. There is no role tracking, so if the **viewer disconnects**, the server still emits `phone_disconnected` to the `facecam` room. The phone would receive this and... nothing, because phone doesn't handle `phone_disconnected`. The remaining viewer also receives it incorrectly.
-
-**Missing:** Role identification. There is no concept of "this socket is the phone" vs "this socket is the viewer."
-
----
-
-### 5.10 Viewer Keep-Alive
-
-**`viewer.html` — `keepAlive()` function:**
-
-```js
-async function keepAlive() {
-  // 1. Wake Lock API — prevents screen sleep
-  try { await navigator.wakeLock.request('screen') } catch {}
-
-  // 2. Silent audio context — prevents browser audio throttling
-  const ctx = new AudioContext()
-  const buf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate)
-  const src = ctx.createBufferSource()
-  src.buffer = buf; src.loop = true
-  src.connect(ctx.destination); src.start()
-
-  // 3. WebGL render loop — prevents browser from throttling hidden tabs
-  const canvas = document.createElement('canvas')
-  canvas.width = canvas.height = 1
-  document.body.appendChild(canvas)
-  const gl = canvas.getContext('webgl')
-  function tick() { gl.clear(gl.COLOR_BUFFER_BIT); requestAnimationFrame(tick) }
-  tick()
-
-  // 4. Resume audio on visibility change
-  document.addEventListener('visibilitychange', () => {
-    if (ctx.state === 'suspended') ctx.resume()
-  })
-}
-keepAlive()   // called unconditionally on page load
-```
-
-**Purpose:** OBS Browser Source uses a headless Chromium that may throttle background tabs. The three-pronged approach (Wake Lock + silent audio + WebGL RAF loop) prevents this.
-
-**Memory/resource concern:** The `AudioContext`, `requestAnimationFrame` loop, and canvas are **never cleaned up**. They run for the entire lifetime of the page. For an OBS Browser Source that stays open indefinitely, this is acceptable and intentional. For a normal browser tab that users open and close, the RAF loop is self-cleaning on page unload.
-
----
-
-### 5.11 Init & Setup Script
-
-**Entry point:** `node init.js`
-
-**Execution trace:**
-
-```js
-// init.js:15-21
-if (!fs.existsSync(path.join(ROOT, 'node_modules'))) {
-  execSync('npm install', { stdio: 'inherit', cwd: ROOT })   // synchronous, blocks
-}
-
-// init.js:24-51 — cert generation
-if (!fs.existsSync(certPath) || !fs.existsSync(keyPath)) {
-  const cmd = `openssl req -x509 -newkey rsa:2048 -keyout "${keyPath}" -out "${certPath}" -days 365 -nodes -subj "/CN=facecam"`
-  try {
-    execSync(cmd, { stdio: 'pipe' })   // synchronous openssl call
-  } catch {
-    // openssl not found — prints platform-specific instructions
-  }
-}
-
-// init.js:53-73 — config.json bootstrap
-if (!fs.existsSync(configPath)) {
-  const defaultConfig = { flipH: false, flipV: false, rotation: 0, hideControls: false, phone: { ... } }
-  fs.writeFileSync(configPath, JSON.stringify(defaultConfig, null, 2))
-}
-
-// init.js:75-92 — ADB detection
-// tries ['adb', '~/Library/Android/sdk/...', '~/AppData/...']
-// execSync('adb version', { stdio: 'pipe' }) — silent fail if not found
-```
-
-**`package.json` scripts:**
-```json
-{
-  "start": "node server.js",
-  "init": "node init.js"
-}
-```
-
-**Gap:** `npm start` does NOT run `init.js` first. A new user running `npm start` without `node init.js` will get:
-- No cert → HTTPS silently disabled (caught)
-- No `config.json` → `GET /api/config` crashes with `ENOENT` (uncaught, returns 500)
-
-The `config.json` crash is the critical one — viewer and phone both call `/api/config` on load.
-
----
-
-## 6. Use-Case Catalog
-
-### UC-01: Start Server
-
-| Field | Detail |
+| Field | Hợp lệ |
 |---|---|
-| **Purpose** | Initialize HTTP and HTTPS servers, attach Socket.IO, serve static files |
-| **Input** | `node server.js` (no CLI args) |
-| **Output** | Two servers listening, QR codes in terminal |
-| **Business Rules** | HTTPS is optional (cert may be absent); HTTP is required |
-| **Dependencies** | `cert.pem`, `key.pem` (optional), `config.json` (required for API), `public/` directory |
-| **Side Effects** | Binds ports 7070 and 7443 on `0.0.0.0` |
-| **Failure Cases** | Port in use → unhandled EADDRINUSE crash; `config.json` missing → API 500 |
-| **Transaction Boundary** | None |
-| **Sequence** | Create Express app → attach middleware → register routes → create HTTP server → try create HTTPS server → call setupSignaling → listen both servers |
+| `flipH` / `flipV` / `hideControls` | boolean |
+| `rotation` | 0 / 90 / 180 / 270 |
+| `phone.facingMode` | `environment` / `user` |
+| `phone.audio` | boolean |
+| `phone.width` / `phone.height` | số nguyên 160–4096 |
+| `phone.frameRate` | số nguyên 1–120 |
+| `phone.maxBitrate` | số nguyên 100 000–20 000 000 |
+
+Giá trị ngoài dải bị **từ chối** (giữ giá trị hiện tại), **không clamp** — `width: 0` là dữ liệu hỏng chứ không phải "hơi nhỏ", nâng lên 160 vẫn là ghi đè rác lên giá trị tốt. Key lạ bị loại. `__proto__` không có đường vào vì hàm chỉ đọc các field đã liệt kê.
+
+**Ghi đĩa:** ghi `.tmp` → `rename` (atomic), nối chuỗi promise để tuần tự hoá. Lỗi ghi được `console.error`, không throw tiếp — config RAM vẫn đúng, chỉ mất tính bền vững.
 
 ---
 
-### UC-02: Phone Connect & Stream
+### 5.4 Signaling — định tuyến đích danh
 
-| Field | Detail |
-|---|---|
-| **Purpose** | Phone opens `phone.html`, connects Socket.IO, user starts camera, phone sends WebRTC offer |
-| **Input** | User tap on "Bật Camera" button |
-| **Output** | `localStream` active, `offer` emitted to server |
-| **Business Rules** | Camera starts only after user gesture (browser security requirement); stream uses `ideal` constraints (not exact) |
-| **Dependencies** | `navigator.mediaDevices.getUserMedia`, Socket.IO connection, server `request_stream` event |
-| **Side Effects** | Camera LED on; stream sent to viewer via P2P after ICE |
-| **Failure Cases** | Permission denied → error shown in status; no cameras → `getCameras()` returns empty list |
-| **Transaction Boundary** | None (stateless beyond in-memory `pc`, `localStream`) |
-| **Sequence** | Load config → connect socket → join 'facecam' room → wait for user tap → getCameras → getUserMedia → show preview → wait for request_stream → createPeer → createOffer → emit offer |
+Đây là phần đổi nhiều nhất so với v1.0. Trước đây mọi event broadcast cả phòng; giờ SDP/ICE đi **1-1**.
 
----
+**Bảng event** (định nghĩa ở `shared.js`):
 
-### UC-03: Viewer Connect & Receive
-
-| Field | Detail |
-|---|---|
-| **Purpose** | Viewer page loads, connects to server, triggers phone to send stream |
-| **Input** | Browser opens `viewer.html` |
-| **Output** | `<video>` element playing phone camera feed |
-| **Business Rules** | Viewer is passive — it requests stream but phone controls offer creation |
-| **Dependencies** | Socket.IO, WebRTC browser APIs, phone being connected and streaming |
-| **Side Effects** | Phone creates new `RTCPeerConnection`; keepAlive resources initialized |
-| **Failure Cases** | Phone not connected → status "Chờ phone..." with 5s retry; ICE failure → no video but no error surfaced |
-| **Transaction Boundary** | None |
-| **Sequence** | Page load → keepAlive() → connect socket → join room → emit request_stream → (phone creates offer) → receive offer → createAnswer → setLocalDescription → emit answer → ICE exchange → ontrack fires → video plays |
-
----
-
-### UC-04: Config Update from Phone
-
-| Field | Detail |
-|---|---|
-| **Purpose** | Phone user changes flip/rotation/resolution settings; viewer updates in realtime |
-| **Input** | Quick bar button click or Settings panel save |
-| **Output** | `config.json` updated; viewer applies transform; `config_updated` socket event propagated |
-| **Business Rules** | Shallow merge — partial updates preserve other keys; phone camera changes require stream restart |
-| **Dependencies** | `/api/config` REST endpoint, `config_updated` Socket.IO event |
-| **Side Effects** | `config.json` written to disk; viewer CSS transform updated |
-| **Failure Cases** | Concurrent writes → last-write-wins (race condition); viewer fetch returns stale data if race |
-| **Transaction Boundary** | No transaction; write is not atomic with socket emit |
-| **Sequence** | User taps button → update local `cfg` state → POST /api/config → emit config_updated → server relays to room → viewer receives → viewer fetches /api/config → viewer calls applyTransform() |
-
----
-
-### UC-05: Flip Camera (Front/Back)
-
-| Field | Detail |
-|---|---|
-| **Purpose** | Switch between front and back camera on phone |
-| **Input** | "Flip cam" quick bar button |
-| **Output** | New `localStream` with different camera; if connected, track hot-swapped via `replaceTrack` |
-| **Business Rules** | Uses `facingMode` constraint; does NOT reset viewer transform (rotation/flip remain) |
-| **Dependencies** | `getUserMedia`, `RTCRtpSender.replaceTrack` |
-| **Side Effects** | Previous stream tracks stopped; new preview shown |
-| **Failure Cases** | Front camera not available → getUserMedia rejects → error in status |
-| **Assumption** | No automatic transform reset when switching to front cam (known UX issue — image may appear mirrored) |
-
----
-
-### UC-06: Phone Disconnect
-
-| Field | Detail |
-|---|---|
-| **Purpose** | Notify viewer when phone socket disconnects |
-| **Input** | Phone closes browser / loses network |
-| **Output** | `phone_disconnected` event emitted to `facecam` room |
-| **Business Rules** | Any disconnecting socket triggers notification (no role check) |
-| **Dependencies** | Socket.IO disconnect event |
-| **Side Effects** | Viewer shows "Phone mất kết nối" status; controls shown |
-| **Failure Cases** | Viewer disconnects → viewer also gets `phone_disconnected` incorrectly |
-
----
-
-### UC-07: Stream Reconnect
-
-| Field | Detail |
-|---|---|
-| **Purpose** | Viewer auto-retries stream request every 5 seconds until phone connects |
-| **Input** | `video.srcObject` null or `video.readyState === 0` |
-| **Output** | `request_stream` emitted; phone re-creates offer |
-| **Business Rules** | Retry only while video not playing |
-| **Dependencies** | `setInterval`, Socket.IO |
-| **Side Effects** | Timer leak on Socket.IO reconnect (new interval created, old not cleared) |
-| **Failure Cases** | `retryTimer` not cleared on `disconnect` → multiple intervals accumulate on frequent reconnects |
-
----
-
-## 7. System Flow Diagrams
-
-### 7.1 Full WebRTC Signaling Flow
-
-```mermaid
-sequenceDiagram
-    participant P as 📱 Phone (phone.html)
-    participant S_H as Server HTTP :7070
-    participant S_S as Server HTTPS :7443
-    participant V as 🖥️ Viewer (viewer.html)
-
-    Note over P,V: Both connect to their respective servers
-
-    P->>S_S: socket connect (HTTPS)
-    V->>S_H: socket connect (HTTP)
-
-    P->>S_S: emit('join', 'facecam')
-    S_S->>S_S: socket.join('facecam')
-    S_S-->>P: (no direct response)
-    S_S->>S_H: peer.to('facecam').emit('request_stream') [bridge]
-
-    V->>S_H: emit('join', 'facecam')
-    S_H->>S_H: socket.join('facecam')
-    S_H->>S_S: peer.to('facecam').emit('request_stream') [bridge]
-    S_S-->>P: emit('request_stream')
-
-    Note over P: createPeer() called
-    P->>P: new RTCPeerConnection()
-    P->>P: createOffer()
-    P->>S_S: emit('offer', { room, sdp })
-    S_S->>S_H: peer.to('facecam').emit('offer', data) [bridge]
-    S_H-->>V: emit('offer', { sdp })
-
-    Note over V: Receives offer
-    V->>V: new RTCPeerConnection()
-    V->>V: setRemoteDescription(sdp)
-    V->>V: createAnswer()
-    V->>S_H: emit('answer', { room, sdp })
-    S_H->>S_S: peer.to('facecam').emit('answer', data) [bridge]
-    S_S-->>P: emit('answer', { sdp })
-
-    P->>P: setRemoteDescription(answer)
-
-    Note over P,V: ICE candidate exchange
-    P->>S_S: emit('ice', { candidate })
-    S_S->>S_H: bridge → to('facecam')
-    S_H-->>V: emit('ice', { candidate })
-
-    V->>S_H: emit('ice', { candidate })
-    S_H->>S_S: bridge → to('facecam')
-    S_S-->>P: emit('ice', { candidate })
-
-    Note over P,V: WebRTC P2P connection established
-    P-->>V: 🎥 Video stream (P2P, NOT through server)
-```
-
----
-
-### 7.2 Config Update Flow
-
-```mermaid
-sequenceDiagram
-    participant U as 👆 User (phone)
-    participant PH as phone.html
-    participant API as POST /api/config
-    participant FS as config.json
-    participant SIO as Socket.IO Server
-    participant VH as viewer.html
-
-    U->>PH: tap quick bar button (e.g. flipH)
-    PH->>PH: toggle cfg.flipH
-    PH->>API: POST /api/config { ...cfg, flipH: true }
-    API->>FS: readFileSync (current config)
-    API->>FS: writeFileSync (merged config)
-    API-->>PH: 200 { updated config }
-    PH->>SIO: emit('config_updated')
-    SIO->>SIO: relay to 'facecam' room (both servers)
-    SIO-->>VH: emit('config_updated')
-    VH->>API: GET /api/config
-    API->>FS: readFileSync
-    API-->>VH: { flipH: true, ... }
-    VH->>VH: applyTransform() → CSS transform on <video>
-```
-
----
-
-### 7.3 Server Boot Flow
-
-```mermaid
-flowchart TD
-    A[node server.js] --> B[Create Express app]
-    B --> C[app.use: static + json]
-    C --> D[Register REST routes]
-    D --> E[Create httpServer]
-    E --> F[new Server httpIO on httpServer]
-    F --> G{cert.pem exists?}
-    G -- Yes --> H[Create httpsServer]
-    H --> I[new Server httpsIO on httpsServer]
-    I --> J[setupSignaling httpsIO peer=httpIO]
-    J --> K[setupSignaling httpIO peer=httpsIO]
-    K --> L[httpsServer.listen :7443]
-    L --> M[httpServer.listen :7070]
-    G -- No / Error --> N[setupSignaling httpIO peer=null]
-    N --> M
-    M --> O[✅ Server ready]
-```
-
----
-
-### 7.4 Component Dependency Graph
-
-```mermaid
-graph LR
-    subgraph Backend["Backend (server.js)"]
-        EX[Express] --> HTTP[HTTP :7070]
-        EX --> HTTPS[HTTPS :7443]
-        HTTP --> SIO_H[Socket.IO HTTP]
-        HTTPS --> SIO_S[Socket.IO HTTPS]
-        SIO_H <-->|bridge closure| SIO_S
-        EX --> CFG[config.json R/W]
-        EX --> QR[QRCode lib]
-        EX --> OS[os.networkInterfaces]
-    end
-
-    subgraph Clients
-        IDX[index.html] -->|GET /api/urls| EX
-        IDX -->|GET /viewer.html| EX
-
-        PH[phone.html] -->|Socket.IO| SIO_H
-        PH -->|Socket.IO| SIO_S
-        PH -->|GET/POST /api/config| EX
-        PH -->|getUserMedia| CAM[📷 Phone Camera]
-
-        VW[viewer.html] -->|Socket.IO| SIO_H
-        VW -->|Socket.IO| SIO_S
-        VW -->|GET /api/config| EX
-        VW -->|WebRTC P2P| PH
-    end
-```
-
----
-
-## 8. Risk Analysis
-
-### 8.1 Race Conditions
-
-| ID | Location | Description | Severity | Fix |
-|---|---|---|---|---|
-| RC-01 | `server.js:34-38` | Concurrent POST /api/config → read-modify-write on `config.json` | Medium | Use async queue or in-memory state as source of truth |
-| RC-02 | `viewer.html` config_updated handler | Viewer emits request then fetches config; multiple rapid emits can interleave HTTP responses | Low | Pass config payload in socket event |
-| RC-03 | `server.js:61-67` join handler | Two clients joining simultaneously can both emit `request_stream` causing phone to create two offers | Low | Server-side debounce or phone-side offer dedup |
-| RC-04 | `viewer.html` retryTimer | `connect` event can fire multiple times (reconnect); each fires a new `setInterval` without clearing previous | Medium | Track and clear timer on each `connect` |
-
----
-
-### 8.2 Concurrency Risks
-
-**Socket.IO room broadcasting:**
-The bridge pattern relays events from one IO instance to another via `peer.to(room).emit()`. Both `setupSignaling` calls share mutable `peer` references. Since JavaScript is single-threaded, there is no actual thread-level concurrency. However, event loop reentrance could theoretically cause issues at scale — not a concern at single-user scale.
-
-**`pc.close()` race in viewer:**
-```js
-// viewer.html — no close() before reassignment
-socket.on('offer', async ({ sdp }) => {
-  pc = new RTCPeerConnection(...)   // old pc leaked if phone reconnects
-  ...
-})
-```
-Each reconnect allocates a new `RTCPeerConnection`. The old one is not closed, consuming resources (ICE agent, sockets). Over many reconnects, this accumulates.
-
----
-
-### 8.3 Memory Leak Risks
-
-| ID | Location | Description | Severity |
+| Event | Hướng | Payload | Mục đích |
 |---|---|---|---|
-| ML-01 | `viewer.html:pc` | Old `RTCPeerConnection` not closed on new offer | Medium |
-| ML-02 | `viewer.html:retryTimer` | Multiple `setInterval` accumulated on reconnect | Medium |
-| ML-03 | `viewer.html:keepAlive` | RAF loop, AudioContext, canvas never cleaned up | Low (intentional for OBS use) |
-| ML-04 | `server.js:setupSignaling` | `peer` closure holds reference to both IO instances permanently | None (expected lifetime = process lifetime) |
+| `join` | client → server | `{ room, role }` | Vào phòng, khai vai trò |
+| `viewer_request` | viewer → phone | `{ from }` | "Cho tôi xem stream" |
+| `phone_ready` | phone → viewer | — | "Tôi sẵn sàng, hỏi lại đi" |
+| `offer` | phone → viewer | gửi `{ to, sdp }`, nhận `{ from, sdp }` | SDP offer |
+| `answer` | viewer → phone | gửi `{ to, sdp }`, nhận `{ from, sdp }` | SDP answer |
+| `ice` | hai chiều | gửi `{ to, candidate }`, nhận `{ from, candidate }` | ICE candidate |
+| `viewer_left` | server → phone | `{ id }` | Dọn peer tương ứng |
+| `phone_disconnected` | server → viewer | — | Phone rớt |
+| `config_updated` | mọi hướng | — | Config đổi, tự fetch lại |
 
----
+**Hai helper:**
 
-### 8.4 Security Issues
-
-| ID | Location | Description | Severity |
-|---|---|---|---|
-| SEC-01 | `server.js:34-38` | No input validation on POST /api/config body | High |
-| SEC-02 | `server.js:30-32` | `JSON.parse(fs.readFileSync(...))` — no try/catch; malformed config.json crashes | High |
-| SEC-03 | `server.js:57+` | No auth on any socket event; any client on LAN can join 'facecam' room | Medium (LAN-only mitigates) |
-| SEC-04 | `server.js:42-53` | No auth on /api/urls; exposes LAN IP to any requester | Low |
-| SEC-05 | `phone.html / viewer.html` | No CSRF protection on REST calls | Low (same-origin) |
-| SEC-06 | `init.js:30` | `openssl` command uses template literal with `keyPath`/`certPath` — these are derived from `__dirname`, not user input — no injection risk | None |
-
-**SEC-01 detail:** The POST body is spread directly into config without validation:
 ```js
-const updated = { ...current, ...req.body }  // req.body can be any JSON
-```
-Potential issues:
-- Prototype pollution via `__proto__` key (mitigated somewhat by `JSON.parse` in recent V8)
-- Type confusion: `flipH: "rm -rf /"` stored in JSON, later read back — no execution path, harmless in practice
-- Path traversal: not applicable (no path is derived from config values)
-
-**SEC-02 detail:**
-```js
-app.get('/api/config', (req, res) => {
-  res.json(JSON.parse(fs.readFileSync(CONFIG_PATH)))  // throws if file missing or invalid JSON
-})
-```
-If `config.json` is manually corrupted, every `/api/config` request returns 500 with Express default error. Should be wrapped in try/catch.
-
----
-
-### 8.5 Scalability Bottlenecks
-
-This is a single-user LAN tool. The following are noted for completeness:
-
-| Bottleneck | Location | Impact at Scale |
-|---|---|---|
-| Synchronous config I/O | `server.js:31,35-37` | Blocks event loop on every config request (negligible at <10 req/s) |
-| Single `config.json` file | All config access | No horizontal scaling; each process has its own file state |
-| Hardcoded room name 'facecam' | `server.js:89,95,103-104` | One global room; no multi-user support |
-| No connection limit | Socket.IO server | Unlimited clients can join; no rate limiting |
-| `getLocalIP()` returns first interface | `server.js:15-22` | Wrong IP on multi-homed hosts |
-
----
-
-## 9. Code Quality Analysis
-
-### 9.1 Dead Code
-
-| Location | Description |
-|---|---|
-| `phone.html` — old `#settingsBtn`, `#controls` (div.row), `#flipBtn` | The old top-right settings button and flip button were superseded by the quick bar. In the current version these have been removed, but the original had `document.getElementById('settingsBtn').style.display = 'none'` at the bottom — hiding UI that was never shown. |
-| `viewer.html` — `saveConfig()` function | Saves only `flipH`, `flipV`, `rotation` — does not save `hideControls`. But `hideControls` is saved inline separately each time. The `saveConfig` function is therefore partially redundant with the inline `fetch` calls in `hideBtn` and `dblclick` handlers. |
-
----
-
-### 9.2 Duplicated Logic
-
-| Pattern | Locations |
-|---|---|
-| Config fetch + UI update | Both `phone.html` (on load) and `viewer.html` (on load + on `config_updated`) independently implement fetch → parse → update UI. No shared utility. |
-| `socket.to(room).emit(...)` + `peer?.to(room).emit(...)` | Repeated verbatim in every event handler in `setupSignaling`. Should be extracted to a helper `relay(io, peer, room, event, data)`. |
-| Status update UI | `phone.html` has `setStatus(text, state)` function; `viewer.html` does inline DOM manipulation (`statusEl.innerHTML = ...`). Two different patterns for the same concern. |
-| `RTCPeerConnection` creation | Both phone and viewer create `RTCPeerConnection({ iceServers: [] })` independently with the same config. |
-
----
-
-### 9.3 God Objects
-
-`server.js` is the single file responsible for:
-- HTTP server creation
-- HTTPS server creation
-- TLS certificate loading
-- Static file serving
-- REST API (config read/write)
-- REST API (URL/QR generation)
-- Network interface detection
-- Socket.IO signaling for two server instances
-- Cross-server bridging
-- Terminal QR code output
-
-At 146 lines for this scope, it is manageable. But it has **zero separation** — any extension (e.g., adding rooms, auth, recording) would require touching the entire file.
-
----
-
-### 9.4 Business Logic Leakage
-
-**Hardcoded room name in signaling logic:**
-```js
-// server.js:89
-socket.to('facecam').emit('request_stream')
-```
-The room name `'facecam'` is a business concept (the name of the streaming session). It appears in:
-- `server.js` (multiple times)
-- `phone.html` (`const ROOM = 'facecam'`)
-- `viewer.html` (`const ROOM = 'facecam'`)
-
-No single source of truth. Changing the room name requires updating 3 files.
-
-**Disconnect notification without role tracking:**
-The disconnect handler doesn't know whether the disconnecting socket is the phone or viewer. It always emits `phone_disconnected`. This is business logic (role → notification type) implemented incorrectly.
-
----
-
-### 9.5 Missing Boundaries/Interfaces
-
-| Missing Boundary | Impact |
-|---|---|
-| No signaling protocol abstraction | The socket event names (`offer`, `answer`, `ice`, `join`, `request_stream`, `config_updated`, `phone_disconnected`) are stringly-typed strings duplicated across server and both clients. A typo causes silent failure. |
-| No config schema/validation | `config.json` has no enforced schema. Missing fields default silently via `?? false` in clients. Extra fields are persisted and propagated. |
-| No role protocol | Phone and viewer are architecturally identical to the server — just socket clients. No role negotiation, no identity. |
-| No reconnection strategy | No exponential backoff on client side; Socket.IO default reconnection is used. |
-
----
-
-## 10. Architecture Quality Scores
-
-| Dimension | Score | Rationale |
-|---|---|---|
-| **Correctness** | 8/10 | Core WebRTC signaling works correctly; minor bugs in disconnect handling and retryTimer |
-| **Maintainability** | 6/10 | Single-file backend is readable but not modular; any extension requires careful reading of entire file |
-| **Testability** | 3/10 | Zero tests; no dependency injection; side effects (fs, Socket.IO) are not mockable without refactor |
-| **Security** | 5/10 | Acceptable for LAN-only tool; missing input validation and error handling on config API |
-| **Scalability** | 2/10 | Not designed for multi-user; single hardcoded room; sync I/O; no horizontal scaling path |
-| **Reliability** | 6/10 | Graceful HTTPS fallback; retryTimer for reconnect; but timer leak and missing error boundaries reduce score |
-| **Observability** | 5/10 | Decent server-side logging of socket events; no structured logging; no client-side error reporting to server |
-| **Developer Experience** | 9/10 | `node init.js` → `npm start` is excellent UX; QR in terminal is clever; README is thorough |
-| **Overall** | **6/10** | Excellent for its scope; known limitations are inherent to the design goals |
-
----
-
-## 11. Refactor Recommendations
-
-### Priority 1 — Critical Bugs
-
-**R1: Fix retryTimer leak in viewer.html**
-```js
-// CURRENT (viewer.html) — leaks on reconnect
-socket.on('connect', () => {
-  retryTimer = setInterval(() => { ... }, 5000)
-})
-
-// FIXED
-let retryTimer = null
-socket.on('connect', () => {
-  clearInterval(retryTimer)   // clear any existing timer first
-  retryTimer = setInterval(() => { ... }, 5000)
-})
-```
-
-**R2: Close old RTCPeerConnection in viewer.html**
-```js
-// CURRENT
-socket.on('offer', async ({ sdp }) => {
-  pc = new RTCPeerConnection(...)   // old pc leaked
-
-// FIXED
-socket.on('offer', async ({ sdp }) => {
-  if (pc) { pc.close(); pc = null }
-  pc = new RTCPeerConnection(...)
-```
-
-**R3: Add config.json error handling in server.js**
-```js
-// CURRENT
-app.get('/api/config', (req, res) => {
-  res.json(JSON.parse(fs.readFileSync(CONFIG_PATH)))  // crashes if missing
-
-// FIXED
-app.get('/api/config', (req, res) => {
-  try {
-    res.json(JSON.parse(fs.readFileSync(CONFIG_PATH)))
-  } catch {
-    res.json({ flipH: false, flipV: false, rotation: 0, hideControls: false,
-               phone: { facingMode: 'environment', width: 1280, height: 720, frameRate: 30 } })
-  }
-})
-```
-
-**R4: Validate POST /api/config body**
-```js
-const VALID_KEYS = new Set(['flipH', 'flipV', 'rotation', 'hideControls', 'phone'])
-app.post('/api/config', (req, res) => {
-  const body = req.body
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
-    return res.status(400).json({ error: 'Invalid body' })
-  }
-  // strip unknown keys
-  const sanitized = Object.fromEntries(Object.entries(body).filter(([k]) => VALID_KEYS.has(k)))
-  const current = JSON.parse(fs.readFileSync(CONFIG_PATH))
-  const updated = { ...current, ...sanitized }
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(updated, null, 2))
-  res.json(updated)
-})
-```
-
-**R5: Merge init.js into npm start**
-```json
-// package.json
-"scripts": {
-  "start": "node init.js && node server.js"
-}
-```
-
----
-
-### Priority 2 — Quality Improvements
-
-**R6: Extract relay helper to eliminate duplication in setupSignaling**
-```js
-// server.js
-function relay(io, peer, room, event, data) {
-  io.to(room).emit(event, data)
+// Broadcast cả phòng, qua cả hai server
+function relay(socket, peer, room, event, data) {
+  socket.to(room).emit(event, data)
   peer?.to(room).emit(event, data)
 }
 
-// Usage:
-socket.on('offer', (data) => relay(io, peer, data.room, 'offer', data))
-socket.on('answer', (data) => relay(io, peer, data.room, 'answer', data))
-socket.on('ice', (data) => relay(io, peer, data.room, 'ice', data))
-```
-
-But note: the current code uses `socket.to()` (excludes sender) while the relay above uses `io.to()` (includes sender). The current behavior is correct — keep `socket.to()` for same-server relay.
-
-**R7: Embed config in config_updated event (eliminate TOCTOU)**
-```js
-// phone.html — saveViewerCfg
-function saveViewerCfg(patch) {
-  const updated = { ...cfg, ...patch }
-  cfg = updated
-  fetch('/api/config', { method: 'POST', ..., body: JSON.stringify(updated) })
-  socket.emit('config_updated', updated)   // send payload directly
+// Gửi 1-1. Socket.IO cho mỗi socket tự join một room trùng id của nó,
+// nên định tuyến đích danh dùng chung cơ chế to() và vẫn qua được bridge.
+function sendTo(socket, peer, targetId, event, data) {
+  if (!targetId) return
+  socket.to(targetId).emit(event, data)
+  peer?.to(targetId).emit(event, data)
 }
-
-// viewer.html — no secondary fetch needed
-socket.on('config_updated', (updatedCfg) => {
-  fH = updatedCfg.flipH ?? false
-  fV = updatedCfg.flipV ?? false
-  rot = updatedCfg.rotation ?? 0
-  applyTransform()
-})
 ```
 
-**R8: Role identification for disconnect**
-```js
-// phone.html — announce role on join
-socket.emit('join', ROOM)
-socket.emit('role', 'phone')   // new event
+**Chống mạo danh:** server **luôn gắn `socket.id` thật** vào `from`, bỏ qua giá trị client tự khai. Không có điều này thì một client có thể mạo danh viewer khác để cướp stream.
 
-// server.js — track roles
-const roles = new Map()   // socketId → 'phone' | 'viewer'
-socket.on('role', (r) => roles.set(socket.id, r))
-socket.on('disconnect', () => {
-  const role = roles.get(socket.id)
-  roles.delete(socket.id)
-  if (role === 'phone') {
-    io.to('facecam').emit('phone_disconnected')
-    peer?.to('facecam').emit('phone_disconnected')
-  }
-})
+**Theo dõi vai trò:** `socket.data.role` và `socket.data.room` lưu lúc join. Cần thiết vì lúc `disconnect` thì `socket.rooms` đã bị Socket.IO xoá sạch.
+
+---
+
+### 5.5 Phone — nhiều peer connection
+
+Phone giữ `Map<viewerId, { pc, pendingIce, iceRestarted }>` — một kết nối riêng cho mỗi viewer.
+
+**Luồng chính:**
+```
+nhận viewer_request { from }
+  → nếu peer của `from` đang new/connecting  → bỏ qua (chống vòng lặp dựng lại)
+  → createPeerFor(from)
+      → đóng peer cũ của viewer này nếu có
+      → addTrack toàn bộ localStream
+      → tuneVideoSender(pc)   // contentHint='detail', maxBitrate, maintain-resolution
+      → createOffer → setLocalDescription → emit offer { to: from }
 ```
 
-**R9: Fix getLocalIP for multi-homed hosts**
+**Hàng đợi ICE:** mỗi entry có `pendingIce` riêng. Candidate tới trước `setRemoteDescription` được xếp hàng, nạp lại bằng `flushIce(entry)`.
+
+**ICE restart:** peer chuyển `failed` → thử `createOffer({ iceRestart: true })` **một lần** (cờ `iceRestarted`) trước khi đóng hẳn. Xử lý trường hợp đổi mạng khiến ICE chết nhưng SDP vẫn dùng lại được.
+
+**Đổi camera:** `startStream()` gọi `replaceTrack` cho **mọi** peer đang mở — không dựng lại connection nào.
+
+**Điều khiển phần cứng:** `refreshCameraControls()` đọc `track.getCapabilities()`, hiện nút đèn và thanh zoom **chỉ khi** máy báo hỗ trợ. Không có API nào chạm được vào chế độ làm đẹp / xoá phông của app Camera hãng — những cái đó nằm trong app OEM, không phải năng lực của camera.
+
+**Đánh đổi:** mỗi viewer là một luồng encode riêng → phone nóng và tốn pin hơn khi mở nhiều viewer.
+
+---
+
+### 5.6 Viewer — một peer connection + stats
+
+Viewer chỉ kết nối tới phone nên giữ đúng một `pc`, cộng thêm `phoneId` để gửi answer/ICE đích danh.
+
+**Phân biệt offer mới với offer ICE-restart:**
 ```js
-function getLocalIP() {
-  const IGNORE = /^(10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)$/
-  // Prefer 192.168.x.x (home LAN) over VPN/Docker ranges
-  const interfaces = os.networkInterfaces()
-  const candidates = []
-  for (const name of Object.keys(interfaces)) {
-    if (/docker|vmware|vbox|utun|tun|vpn/i.test(name)) continue
-    for (const iface of interfaces[name]) {
-      if (iface.family === 'IPv4' && !iface.internal) candidates.push(iface.address)
-    }
-  }
-  return candidates.find(ip => ip.startsWith('192.168.'))
-      || candidates.find(ip => ip.startsWith('10.'))
-      || candidates[0]
-      || 'localhost'
-}
+const isRestart = pc && from === phoneId && pc.connectionState !== 'closed'
+if (!isRestart) { /* dựng pc mới */ }
+```
+Nhờ vậy ICE restart **tái dùng** connection, không mất hình.
+
+**Vòng retry:** `startRetry()` hỏi lại mỗi 5s cho tới khi có hình, tự dừng khi video chạy. Được kích hoạt lại khi: socket connect, `phone_disconnected`, `connectionState === 'failed'`, hoặc xử lý offer lỗi. Luôn `clearInterval` trước khi tạo mới.
+
+**Stats:** `pc.getStats()` mỗi 2s, lọc `inbound-rtp` kind `video`, tính bitrate từ delta `bytesReceived`. Hiện `1280×720 · 30fps · 3.2 Mbps`.
+
+**Xoay:** `applyTransform()` hoán đổi `width`/`height` element (`100vw` ↔ `100vh`) khi rotation là 90/270 — vì `transform: rotate()` không đổi layout box, không hoán đổi thì `object-fit: cover` crop sai.
+
+**Keep-alive (cho OBS Browser Source):** Wake Lock + audio im lặng + vòng lặp WebGL. Có kiểm tra `gl` null, và resume `AudioContext` khi click / đổi visibility vì nó sinh ra ở trạng thái `suspended` khi chưa có user gesture.
+
+---
+
+### 5.7 Đồng bộ config giữa ba trang
+
+Cả ba trang đều: `POST /api/config` → `emit('config_updated')` → các trang khác `fetchConfig()` rồi cập nhật UI.
+
+`control.html` **có join phòng** với role `control` — bắt buộc, vì server relay `config_updated` theo phòng.
+
+> **Hạn chế đã biết (TOCTOU):** event `config_updated` không mang payload, bên nhận phải fetch riêng. Hai thay đổi liên tiếp có thể khiến response về không đúng thứ tự. Đã cân nhắc nhét config vào payload nhưng chưa làm — xác suất thấp ở quy mô một người dùng.
+
+---
+
+### 5.8 Bridge HTTP ↔ HTTPS
+
+Khi có cert, `setupSignaling` được gọi hai lần, mỗi lần với `peer` là io còn lại:
+
+```js
+setupSignaling(httpsIO, httpIO, 'HTTPS')
+setupSignaling(httpIO, httpsIO, 'HTTP')
+```
+
+Cần thiết vì phone thường ở HTTPS (WiFi) còn viewer ở HTTP (localhost) — hai instance Socket.IO tách biệt.
+
+Mỗi event gửi sang cả hai phía; phía không có người nhận thì rơi vào phòng rỗng — vô hại. Định tuyến đích danh cũng hoạt động qua bridge, vì socket id là một room ngầm.
+
+---
+
+### 5.9 Phát hiện IP LAN
+
+```js
+const VIRTUAL_IFACE = /virtual|vmware|virtualbox|vethernet|hyper-?v|docker|tailscale|zerotier|tap-|tun\d|loopback/i
+```
+
+`listLocalIPs()` loại IPv4 internal và APIPA `169.254.x`, rồi xếp: **card thật trước card ảo**, trong nhóm card thật ưu tiên Wi-Fi rồi Ethernet.
+
+Cần thiết vì card ảo (WSL, Docker, VirtualBox, VPN) cũng là IPv4 non-internal — chọn nhầm thì QR trỏ vào IP mà phone không tới được.
+
+`/api/urls` nhận tham số `?ip=`, nhưng **chỉ chấp nhận IP thật có trên máy** để endpoint không thành công cụ sinh QR tuỳ ý. `index.html` hiện dropdown chọn IP khi máy có nhiều hơn một card.
+
+---
+
+### 5.10 `init.js`
+
+Bốn bước: kiểm `node_modules` → sinh cert → kiểm `config.json` → dò ADB.
+
+**Cert:** tự lấy IP LAN, thêm `-addext "subjectAltName=IP:<ip>,IP:127.0.0.1,DNS:facecam,DNS:localhost"`. Chrome bỏ qua trường CN từ bản 58, chỉ đọc SAN. Có nhánh dự phòng cho OpenSSL < 1.1.1 (tạo cert không SAN nhưng nói rõ hệ quả). Với cert sẵn có thì phân biệt "không có SAN" và "SAN trỏ IP cũ".
+
+**Config:** **không** tự tạo nữa — `server.js` đã dựng từ `DEFAULT_CONFIG` khi thiếu. Giữ bản default thứ hai ở đây từng khiến hai bên trôi dạt (`init.js` thiếu `maxBitrate`).
+
+**ADB:** chỉ dò path của đúng OS đang chạy.
+
+---
+
+## 6. Danh mục use-case
+
+### UC-01 · Khởi động server
+| | |
+|---|---|
+| **Vào** | `npm start` (hoặc `PORT=... npm start`) |
+| **Ra** | Hai server listening, QR + URL kèm token trong terminal |
+| **Quy tắc** | HTTPS tuỳ chọn; HTTP bắt buộc |
+| **Phụ thuộc** | `public/`; cert (tuỳ chọn); `config.json` và `.token` tự tạo nếu thiếu |
+| **Thất bại** | Port bận → thông báo theo OS, HTTP thì thoát, HTTPS thì chạy tiếp |
+
+### UC-02 · Phone kết nối & stream
+| | |
+|---|---|
+| **Vào** | Quét QR (kèm token) → chạm "Bật Camera" |
+| **Ra** | `localStream` chạy, `phone_ready` phát đi |
+| **Quy tắc** | Camera chỉ mở sau thao tác người dùng; dùng ràng buộc `ideal` |
+| **Thất bại** | Từ chối quyền → hiện lỗi ở status; thiếu token → 401 trước cả khi tải trang |
+| **Trình tự** | nạp config → socket connect → join role=phone → chờ chạm → getUserMedia → getCameras → đọc capabilities → emit phone_ready |
+
+### UC-03 · Viewer kết nối & nhận hình
+| | |
+|---|---|
+| **Vào** | Mở `viewer.html` (localhost thì không cần token) |
+| **Ra** | `<video>` phát hình, stats cập nhật mỗi 2s |
+| **Quy tắc** | Viewer chủ động hỏi; phone quyết định tạo offer |
+| **Thất bại** | Phone chưa bật → "Chờ phone..." + retry 5s |
+| **Trình tự** | keepAlive → connect → join role=viewer → server tự bắn viewer_request hộ → nhận offer → answer → ICE → ontrack → startStats |
+
+### UC-04 · Nhiều viewer cùng lúc
+| | |
+|---|---|
+| **Vào** | Viewer thứ hai mở trang (ví dụ: tab canh chỉnh + OBS Browser Source) |
+| **Ra** | Phone tạo peer connection **thứ hai**, cả hai cùng nhận hình |
+| **Quy tắc** | Mỗi viewer một peer riêng; đóng một cái không ảnh hưởng cái kia |
+| **Đánh đổi** | Phone encode nhiều luồng → nóng và tốn pin hơn |
+| **Dọn dẹp** | `viewer_left { id }` → phone đóng đúng peer đó |
+
+### UC-05 · Cập nhật config
+| | |
+|---|---|
+| **Vào** | Thao tác trên `control.html`, quick bar phone, hoặc nút viewer |
+| **Ra** | `config.json` cập nhật; các trang khác đồng bộ qua `config_updated` |
+| **Quy tắc** | Merge sâu cho `phone`; giá trị ngoài dải bị từ chối; `maxBitrate` áp ngay, độ phân giải cần bật lại camera |
+| **Thất bại** | Ghi đĩa lỗi → log, config RAM vẫn đúng |
+
+### UC-06 · Phone rớt kết nối
+| | |
+|---|---|
+| **Vào** | Phone đóng trang / mất mạng |
+| **Ra** | `phone_disconnected` chỉ gửi cho viewer (kiểm role) |
+| **Quy tắc** | Viewer đóng tab **không** kích hoạt event này |
+| **Hồi phục** | Viewer xoá `srcObject`, bật lại vòng retry |
+
+### UC-07 · Phone vào lại
+| | |
+|---|---|
+| **Vào** | Phone reconnect sau khi rớt |
+| **Ra** | `phone_ready` → viewer hỏi lại → offer mới |
+| **Quy tắc** | Không cần thao tác tay ở cả hai phía |
+
+### UC-08 · Đổi mạng giữa chừng
+| | |
+|---|---|
+| **Vào** | Phone đổi AP / chuyển WiFi ↔ 4G khiến ICE chết |
+| **Ra** | Thử ICE restart một lần; thất bại thì đóng peer và chờ viewer hỏi lại |
+| **Quy tắc** | Viewer tái dùng peer connection khi nhận offer restart |
+
+---
+
+## 7. Sơ đồ luồng
+
+### 7.1 Signaling — hai viewer, định tuyến đích danh
+
+```mermaid
+sequenceDiagram
+    participant P as 📱 phone.html
+    participant SS as Server HTTPS :7443
+    participant SH as Server HTTP :7070
+    participant V1 as 🖥️ viewer 1
+    participant V2 as 🖥️ viewer 2
+
+    P->>SS: join { room, role: phone }
+    SS->>SH: relay phone_ready [bridge]
+
+    V1->>SH: join { room, role: viewer }
+    Note over SH: server tự gắn from = socket.id
+    SH->>SS: relay viewer_request { from: V1 } [bridge]
+    SS-->>P: viewer_request { from: V1 }
+
+    Note over P: createPeerFor(V1)
+    P->>SS: offer { to: V1, sdp }
+    SS->>SH: sendTo(V1) [bridge]
+    SH-->>V1: offer { from: P, sdp }
+    V1->>SH: answer { to: P, sdp }
+    SH->>SS: sendTo(P) [bridge]
+    SS-->>P: answer { from: V1, sdp }
+    Note over P,V1: ICE 1-1 → P2P thiết lập
+    P-->>V1: 🎥 stream
+
+    V2->>SH: join { room, role: viewer }
+    SH->>SS: relay viewer_request { from: V2 } [bridge]
+    SS-->>P: viewer_request { from: V2 }
+
+    Note over P: createPeerFor(V2)<br/>peer riêng, V1 không bị ảnh hưởng
+    P->>SS: offer { to: V2, sdp }
+    SS->>SH: sendTo(V2) [bridge]
+    SH-->>V2: offer { from: P, sdp }
+    Note over P,V2: bắt tay riêng
+    P-->>V2: 🎥 stream
+
+    V1->>SH: (đóng tab)
+    SH->>SS: viewer_left { id: V1 } [bridge]
+    SS-->>P: viewer_left { id: V1 }
+    Note over P: closePeer(V1)<br/>V2 vẫn stream bình thường
+```
+
+### 7.2 Xác thực
+
+```mermaid
+flowchart TD
+    A[Request tới] --> B{remoteAddress<br/>là localhost?}
+    B -- Có --> P[✅ Cho qua]
+    B -- Không --> C{query ?t= khớp<br/>TOKEN?}
+    C -- Có --> D[Set-Cookie fc_token] --> P
+    C -- Không --> E{cookie fc_token<br/>khớp TOKEN?}
+    E -- Có --> P
+    E -- Không --> F[❌ 401 + log cảnh báo]
+
+    P --> G[express.static / REST]
+
+    H[Socket handshake] --> I{localhost?}
+    I -- Có --> J[✅ next]
+    I -- Không --> K{cookie hoặc<br/>auth.token khớp?}
+    K -- Có --> J
+    K -- Không --> L[❌ next Error unauthorized]
+```
+
+### 7.3 Khởi động
+
+```mermaid
+flowchart TD
+    A[node server.js] --> B[Đọc PORT / HTTPS_PORT]
+    B --> C[Nạp hoặc sinh .token]
+    C --> D[Auth middleware<br/>ĐẶT TRƯỚC static]
+    D --> E[static + json]
+    E --> F[Nạp config.json<br/>merge sâu với DEFAULT]
+    F --> G[Đăng ký REST routes]
+    G --> H[httpServer + httpIO + guardSocket]
+    H --> I{Đọc được cert?}
+    I -- Có --> J[httpsIO + guardSocket]
+    J --> K[setupSignaling hai chiều]
+    K --> L[listen :7443 → QR + URL kèm token]
+    I -- ENOENT --> M[Chỉ HTTP, không bridge]
+    I -- Lỗi khác --> N[Báo lỗi cụ thể] --> M
+    L --> O[listen :7070 → QR USB]
+    M --> O
+    O --> Q[Đăng ký SIGINT / SIGTERM]
+    Q --> R[✅ Sẵn sàng]
 ```
 
 ---
 
-### Priority 3 — Structural Improvements
+## 8. Phân tích rủi ro
 
-**R10: Suggested folder structure for future growth**
-```
-facecamserver/
-├── server.js              ← entry point only (create app, listen)
-├── src/
-│   ├── config.js          ← config read/write with validation + caching
-│   ├── signaling.js       ← setupSignaling, relay helper, role tracking
-│   ├── network.js         ← getLocalIP
-│   └── qr.js              ← QR generation helpers
-├── public/
-│   ├── index.html
-│   ├── phone.html
-│   └── viewer.html
-├── init.js
-├── config.json
-└── docs/
-```
+### 8.1 Race condition
 
-**R11: Update README to document `node init.js` as the first step**
-```markdown
-## Quick Start
+| ID | Vị trí | Mô tả | Mức | Trạng thái |
+|---|---|---|---|---|
+| RC-01 | `POST /api/config` | Ghi đồng thời vào `config.json` | — | **Đã xử lý** — cache RAM là nguồn sự thật, ghi atomic và tuần tự hoá |
+| RC-02 | `config_updated` | Bên nhận fetch riêng, hai thay đổi liên tiếp có thể về sai thứ tự | Thấp | **Còn** — xác suất thấp ở một người dùng |
+| RC-03 | `viewer_request` trùng lặp | Viewer retry trong lúc đang bắt tay | — | **Đã xử lý** — bỏ qua khi peer `new`/`connecting` |
+| RC-04 | `retryTimer` | Nhiều `setInterval` chồng nhau khi reconnect | — | **Đã xử lý** — luôn `clearInterval` trước |
+| RC-05 | ICE trước SDP | `addIceCandidate` ném `InvalidStateError`, mất candidate | — | **Đã xử lý** — hàng đợi `pendingIce` mỗi peer |
 
-1. Clone and init:
-   ```
-   git clone <repo> && cd facecamserver
-   node init.js      ← installs deps, creates cert, creates config
-   npm start
-   ```
-```
+### 8.2 Rò rỉ bộ nhớ
+
+| ID | Vị trí | Mô tả | Trạng thái |
+|---|---|---|---|
+| ML-01 | `viewer.html` `pc` | Peer cũ không đóng khi có offer mới | **Đã xử lý** — `close()` trước khi tạo mới, trừ trường hợp ICE restart (cố ý tái dùng) |
+| ML-02 | `retryTimer` | Interval chồng nhau | **Đã xử lý** |
+| ML-03 | `keepAlive` | RAF loop, AudioContext, canvas không dọn | **Còn** — cố ý, vòng đời = vòng đời trang OBS |
+| ML-04 | `peers` Map ở phone | Peer chết tích lại | **Đã xử lý** — `viewer_left` + `closePeer()` khi `failed` |
+| ML-05 | `statsTimer` | Interval stats ở viewer | **Đã xử lý** — `stopStats()` khi mất kết nối |
+
+### 8.3 Bảo mật
+
+| ID | Mô tả | Mức | Trạng thái |
+|---|---|---|---|
+| SEC-01 | Không validate body `POST /api/config` | — | **Đã xử lý** — `sanitizeConfig()` kiểm kiểu + miền giá trị |
+| SEC-02 | `config.json` hỏng làm server chết | — | **Đã xử lý** — try/catch, dựng lại từ default |
+| SEC-03 | Không xác thực — ai trong LAN cũng xem được camera | — | **Đã xử lý** — token cho thiết bị LAN, localhost miễn |
+| SEC-04 | `/api/urls` lộ IP LAN | — | **Đã xử lý** — nằm sau lớp auth |
+| SEC-05 | Không CSRF | Thấp | **Còn** — cookie `SameSite=Lax`, cùng origin |
+| SEC-06 | Cert không có SAN | Thấp | **Một phần** — `init.js` đã sinh cert có SAN, nhưng cert cũ trên máy chưa tạo lại |
+| SEC-07 | Client mạo danh viewer khác | — | **Đã xử lý** — server luôn gắn `socket.id` thật |
+| SEC-08 | Không rate limit | Thấp | **Còn** — cố ý; sau SEC-03 thì người lạ không vào được để spam |
+
+### 8.4 Giới hạn quy mô
+
+Đây là công cụ LAN một người dùng. Ghi lại cho đầy đủ:
+
+| Giới hạn | Ảnh hưởng |
+|---|---|
+| Một phòng hardcode `'facecam'` | Một phiên stream tại một thời điểm; không hỗ trợ nhiều người dùng |
+| Phone encode một luồng mỗi viewer | Mở nhiều viewer làm phone nóng, tụt fps |
+| Không STUN/TURN | Bắt buộc cùng subnet |
+| Config một file | Không scale ngang |
+| Không giới hạn số kết nối | Chấp nhận được sau khi có auth |
 
 ---
 
-## 12. Final Verdict
+## 9. Chất lượng code
 
-FaceCam Server is a **well-scoped, pragmatically implemented tool** that solves its target problem effectively. The WebRTC signaling bridge between HTTP and HTTPS Socket.IO servers is the most interesting architectural decision — it correctly handles the common case where phone uses WiFi/HTTPS and viewer uses localhost/HTTP.
+### 9.1 Code chết
+Không còn. `setStatus()` ở `viewer.html` trước đây định nghĩa mà không gọi, nay đã được dùng thật.
 
-**What the architecture gets right:**
-- Minimal footprint (one Node.js file, no database, no auth complexity)
-- Correct understanding of WebRTC security model (HTTPS required for getUserMedia on WiFi)
-- P2P video (server is never in the video path)
-- Graceful HTTPS fallback when cert is missing
-- Cross-server bridging without a shared adapter (Redis/etc.) — works because it's single-process
+### 9.2 Trùng lặp
 
-**What needs immediate attention:**
-1. `config.json` missing → 500 on startup (SEC-02, no try/catch)
-2. `retryTimer` leak on reconnect (ML-02, RC-04)
-3. Old `RTCPeerConnection` not closed in viewer (ML-01)
-4. `npm start` without `node init.js` → broken state
+| Mẫu | Trạng thái |
+|---|---|
+| `socket.to()` + `peer?.to()` lặp 6 lần | **Đã gộp** — `relay()` / `sendTo()` |
+| Tên event rải rác 4 file | **Đã gộp** — `shared.js` |
+| `fetch('/api/config')` lặp ở 3 trang | **Đã gộp** — `fetchConfig()` / `saveConfig()` |
+| `RTCPeerConnection({iceServers: []})` | **Đã gộp** — `RTC_CONFIG` |
+| Hàm `setStatus` mỗi trang một kiểu | **Còn — cố ý**: mỗi trang một dạng UI khác nhau, gộp sẽ tạo abstraction cho code dùng một lần |
+| `flushIce` ở phone và viewer | **Còn — cố ý**: phone quản nhiều peer, viewer một peer |
 
-**What can be deferred:**
-- Input validation (low risk on LAN)
-- Role identification for disconnect (cosmetic bug only)
-- Config TOCTOU (single-user, race is theoretical)
-- Folder structure refactor (only needed if feature growth is planned)
+### 9.3 God object
+`server.js` (414 dòng) vẫn làm: HTTP, HTTPS, TLS, auth, static, REST, phát hiện mạng, signaling hai instance, bridge, QR terminal, shutdown. Vẫn đọc được, nhưng đã đến ngưỡng nên cân nhắc tách nếu còn thêm tính năng.
 
-The codebase is **appropriate for its scale**. The bugs noted are real but low-severity given the single-user LAN deployment model. The most impactful single improvement is merging `init.js` into `npm start` to eliminate the onboarding gap.
+### 9.4 Rò rỉ business logic
+- Tên phòng `'facecam'`: vẫn hardcode nhưng đã về **một** nguồn (`shared.js`).
+- Vai trò đã có protocol rõ ràng (`ROLE`), không còn suy đoán ngầm.
+
+### 9.5 Ranh giới còn thiếu
+
+| Ranh giới | Ảnh hưởng |
+|---|---|
+| Không có schema config chính thức | Validate viết tay trong `sanitizeConfig()`; thêm field phải sửa ba chỗ (server, phone, control) |
+| Không có test tự động trong repo | Script test nằm ngoài repo, không chạy lại được tự động |
+| Không có abstraction nhiều phòng | Muốn nhiều phiên đồng thời phải sửa cả `shared.js` lẫn cách join |
+| Không có chiến lược reconnect riêng | Dùng mặc định của Socket.IO, không backoff luỹ thừa |
+
+---
+
+## 10. Điểm chất lượng kiến trúc
+
+| Tiêu chí | v1.0 | **v2.0** | Lý do thay đổi |
+|---|---|---|---|
+| **Đúng đắn** | 8/10 | **9/10** | Đã sửa 11 bug thật gồm cả các lỗi chỉ lộ khi dùng hằng ngày |
+| **Bảo trì** | 6/10 | **7/10** | Protocol về một nguồn, tách helper; nhưng vẫn là monolith một file |
+| **Kiểm thử** | 3/10 | **5/10** | Đã có 30 test chạy được, nhưng chưa nằm trong repo/CI |
+| **Bảo mật** | 5/10 | **8/10** | Auth hai lớp, validate đầu vào, chống mạo danh; trừ điểm vì cert chưa có SAN |
+| **Khả năng mở rộng** | 2/10 | **4/10** | Nhiều viewer đã chạy; vẫn một phòng, vẫn không TURN |
+| **Độ tin cậy** | 6/10 | **9/10** | Tự phục hồi sau reconnect, ICE restart, ghi atomic, graceful shutdown, xử lý lỗi port |
+| **Khả năng quan sát** | 5/10 | **7/10** | Log có role/id, stats thời gian thực ở viewer; chưa có structured logging |
+| **Trải nghiệm dev** | 9/10 | **9/10** | Vẫn tốt; thêm `npm run dev`, biến môi trường, thông báo lỗi rõ |
+| **Tổng** | **6/10** | **7.5/10** | |
+
+---
+
+## 11. Khuyến nghị còn lại
+
+### Ưu tiên 1 — đáng làm tiếp
+
+**R1 · Đưa test vào repo.** 30 test hiện chạy từ scratchpad. Chuyển vào `test/`, thêm `npm test` dùng `node --test` (có sẵn từ Node 18, không cần dependency).
+
+**R2 · Tạo lại cert có SAN.** Xoá `cert.pem` + `key.pem` rồi `npm run init`. Người dùng đã biết và chọn hoãn.
+
+**R3 · Nhét config vào payload `config_updated`.** Bỏ được vòng fetch thứ hai và xử lý luôn RC-02.
+
+### Ưu tiên 2 — khi cần mở rộng
+
+**R4 · Tách `server.js`** thành `src/auth.js`, `src/config.js`, `src/signaling.js`, `src/network.js`. Chỉ đáng làm nếu còn thêm tính năng.
+
+**R5 · Nhiều phòng.** Thay `ROOM` cố định bằng id phiên trong URL, cho phép nhiều cặp phone-viewer độc lập.
+
+**R6 · ESLint + Prettier.** Cần thêm dependency.
+
+### Ưu tiên 3 — tính năng
+
+**R7 · Filter/hiệu ứng hình ảnh ở viewer.** Đã có kế hoạch hai tầng: Tầng A dùng CSS filter (rẻ, chỉnh realtime qua `control.html` nhờ hạ tầng config sẵn có), Tầng B dùng WebGL/canvas cho xoá phông và làm mịn da thật. Chưa implement.
+
+**R8 · Ghi hình phía viewer** bằng `MediaRecorder`.
+
+---
+
+## 12. Kết luận
+
+FaceCam Server là **công cụ có phạm vi rõ ràng, hiện thực thực dụng**. Quyết định kiến trúc thú vị nhất vẫn là bridge signaling giữa hai instance Socket.IO trên HTTP và HTTPS — nó xử lý đúng trường hợp phổ biến nhất: phone dùng WiFi/HTTPS còn viewer dùng localhost/HTTP.
+
+**Điểm mạnh:**
+- Dấu chân tối thiểu — một file backend, không database
+- Hiểu đúng mô hình bảo mật của WebRTC (HTTPS bắt buộc cho `getUserMedia` ngoài localhost)
+- Video P2P — server không bao giờ nằm trên đường truyền hình
+- Hạ tầng config đủ tốt để mọi tính năng mới (mic, filter…) chỉ là thêm một field
+- Giới hạn cố ý (không STUN, một phòng) được ghi rõ chứ không giấu
+
+**So với v1.0**, hệ thống đã đổi bản chất ở ba điểm:
+1. **Từ một viewer sang nhiều viewer** — protocol chuyển từ broadcast sang định tuyến đích danh.
+2. **Từ không có bảo mật sang có** — thiết bị LAN cần token, localhost được miễn để OBS chạy êm.
+3. **Từ mong manh sang tự phục hồi** — reconnect, ICE restart, hàng đợi ICE, ghi atomic.
+
+**Việc đáng làm nhất tiếp theo** là đưa bộ test vào repo. Codebase giờ đã có protocol đủ phức tạp (định tuyến đích danh, đa peer, ICE restart) để một thay đổi vô ý có thể phá vỡ mà không lộ ra ngay — đúng loại lỗi mà 30 test hiện có bắt được, nhưng chỉ khi chúng còn chạy được.
