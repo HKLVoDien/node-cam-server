@@ -7,7 +7,7 @@ Biến điện thoại Android/iPhone thành webcam qua WebRTC, không cần cà
 ## Kiến trúc
 
 ```
-Phone (Brave/Chrome)          Mac
+Phone (Brave/Chrome)          PC (Windows/macOS/Linux)
 ┌─────────────────┐          ┌──────────────────────────┐
 │  phone.html     │          │  Node.js Server          │
 │  getUserMedia() │◄─────────│  - HTTP  :7070 (USB)     │
@@ -26,6 +26,10 @@ Phone (Brave/Chrome)          Mac
 ```
 
 **Lưu ý quan trọng:** Node.js chỉ làm signaling (trao đổi SDP/ICE). Video truyền P2P trực tiếp giữa phone và PC — không đi qua server.
+
+**Chỉ chạy trong cùng subnet.** `iceServers` để rỗng (không dùng STUN/TURN) nên WebRTC chỉ ghép được bằng host candidate. Phone và PC phải cùng một mạng LAN. Không hoạt động khi: mạng khách bật AP isolation, phone dùng 4G, hai bên khác subnet, hoặc firewall chặn UDP nội bộ. Đây là chủ ý — công cụ LAN không cần STUN, và không có STUN thì không rò rỉ IP ra ngoài.
+
+**Nhiều viewer cùng lúc:** phone giữ một kết nối riêng cho mỗi viewer, nên mở song song viewer để canh chỉnh + OBS Browser Source đều chạy được. Đổi lại phone phải encode nhiều luồng → nóng máy và tốn pin hơn; đừng mở thừa tab viewer.
 
 ---
 
@@ -75,10 +79,17 @@ npm install
 <details>
 <summary><b>Windows</b></summary>
 
-Cách đơn giản nhất — chạy trong **Git Bash** hoặc **WSL** (đã có sẵn `openssl`):
+Cách đơn giản nhất — chạy trong **Git Bash** hoặc **WSL** (đã có sẵn `openssl`).
+Thay `192.168.1.5` bằng IP LAN của máy bạn:
 ```bash
-openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes -subj '/CN=facecam'
+MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes \
+  -subj '/CN=facecam' \
+  -addext 'subjectAltName=IP:192.168.1.5,IP:127.0.0.1,DNS:facecam,DNS:localhost'
 ```
+
+> **`MSYS_NO_PATHCONV=1` là bắt buộc trên Git Bash:** nếu không, Git Bash sẽ tưởng `/CN=facecam` là đường dẫn và đổi nó thành `C:/Program Files/Git/CN=facecam`, lệnh sẽ báo `subject name is expected to be in the format /type0=value0...`. WSL không cần biến này.
+
+> **Bắt buộc có `-addext`:** Chrome bỏ qua trường `CN` từ bản 58, chỉ đọc `subjectAltName`. Cert thiếu SAN sẽ báo `ERR_CERT_COMMON_NAME_INVALID` và một số WebView không cho bỏ qua cảnh báo. `npm run init` tự điền IP giúp bạn.
 
 Nếu chỉ có **PowerShell** (Win10/11) và không có `openssl`:
 ```powershell
@@ -96,7 +107,9 @@ openssl pkcs12 -in cert.pfx -nokeys -out cert.pem -passin pass:facecam
 <summary><b>macOS / Linux</b></summary>
 
 ```bash
-openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes -subj '/CN=facecam'
+openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes \
+  -subj '/CN=facecam' \
+  -addext "subjectAltName=IP:$(ipconfig getifaddr en0),IP:127.0.0.1,DNS:facecam,DNS:localhost"
 ```
 </details>
 
@@ -112,12 +125,19 @@ openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -node
 ## Chạy server
 
 ```bash
-node server.js
+npm start        # chạy bình thường
+npm run dev      # tự restart khi sửa code (cần Node 18.11+)
 ```
 
 Terminal sẽ hiện:
 - QR code cho USB mode và WiFi mode
 - URL viewer cho PC
+
+Đổi port bằng biến môi trường nếu 7070/7443 đã bị chiếm:
+```bash
+PORT=8080 HTTPS_PORT=8443 npm start        # macOS/Linux/Git Bash
+$env:PORT=8080; $env:HTTPS_PORT=8443; npm start   # PowerShell
+```
 
 ---
 
@@ -125,23 +145,41 @@ Terminal sẽ hiện:
 
 ### USB mode (khuyến nghị — camera hoạt động ngay, không cần HTTPS)
 
-1. Cắm USB phone vào Mac
+1. Cắm USB phone vào PC
 2. Bật **USB Debugging** trên Android: Settings → Developer Options → USB Debugging
 3. Chạy ADB reverse:
    ```bash
-   ~/Library/Android/sdk/platform-tools/adb reverse tcp:7070 tcp:7070
+   adb reverse tcp:7070 tcp:7070
    ```
 4. Phone mở Brave/Chrome → gõ `http://localhost:7070/phone.html`
 5. Bấm **▶ Bật Camera**
 
+> USB mode đi qua `localhost` nên **không cần token**.
+
 ### WiFi mode (không cần dây)
 
-1. Phone và Mac cùng WiFi
-2. Phone quét QR WiFi trong terminal (hoặc gõ `https://192.168.x.x:7443/phone.html`)
+1. Phone và PC cùng WiFi
+2. Phone quét QR WiFi trong terminal — QR đã kèm sẵn token (xem mục dưới)
 3. Bấm **Advanced → Proceed** để qua self-signed cert warning
 4. Bấm **▶ Bật Camera**
 
 > **Lý do cần HTTPS:** Browser chỉ cho phép `getUserMedia()` (camera) trên secure context. `localhost` được miễn trừ nên USB mode dùng HTTP bình thường.
+
+---
+
+## Xác thực (token)
+
+Server listen trên `0.0.0.0`, nên nếu không có lớp này thì **bất kỳ ai cùng LAN mở `/viewer.html` là xem được camera của bạn**. Quy tắc:
+
+| Truy cập từ | Cần token? |
+|---|---|
+| `localhost` — viewer trên PC, OBS, USB mode (`adb reverse`) | ❌ Không |
+| Thiết bị khác trong LAN — phone qua WiFi, tablet | ✅ Có |
+
+- Token sinh tự động ở lần chạy đầu, lưu vào `.token` (đã gitignore) và **giữ nguyên qua các lần restart** — nhờ vậy URL trong OBS Browser Source không bị hỏng mỗi lần khởi động lại server.
+- QR WiFi trong terminal đã kèm sẵn `?t=<token>`. Vào lần đầu bằng link đó, server set cookie → các trang sau (`control.html`…) trên cùng máy đó không cần token nữa.
+- Terminal cũng in sẵn link `control.html` kèm token để mở trên thiết bị LAN khác.
+- **Đổi token:** xoá file `.token` rồi khởi động lại server. Nhớ quét lại QR trên phone.
 
 ---
 
@@ -160,26 +198,69 @@ Terminal sẽ hiện:
 
 ## Cấu hình `config.json`
 
-Chỉnh file `config.json` để lưu cài đặt, tự động load khi viewer mở:
+`config.json` **không nằm trong git** (đã gitignore vì server ghi vào nó lúc chạy) — server tự tạo với giá trị mặc định ở lần khởi động đầu tiên.
 
 ```json
 {
   "flipH": false,
   "flipV": false,
   "rotation": 0,
-  "hideControls": false
+  "hideControls": false,
+  "phone": {
+    "facingMode": "environment",
+    "width": 1280,
+    "height": 720,
+    "frameRate": 30,
+    "maxBitrate": 4000000
+  }
 }
 ```
 
-| Option | Giá trị | Mô tả |
+**Viewer (PC)** — đồng bộ ngay lập tức:
+
+| Option | Giá trị hợp lệ | Mô tả |
 |---|---|---|
 | `flipH` | `true/false` | Lật ngang |
 | `flipV` | `true/false` | Lật dọc |
 | `rotation` | `0/90/180/270` | Xoay video |
 | `hideControls` | `true/false` | Ẩn thanh điều khiển |
 
-Có thể chỉnh trực tiếp trên viewer bằng các nút — tự lưu vào `config.json`.  
-**Double click** lên màn hình để hiện lại controls khi đã ẩn.
+**Camera điện thoại** (`phone.*`) — chỉ áp dụng khi phone **tắt rồi bật lại camera**, vì độ phân giải được set lúc mở camera. Riêng `maxBitrate` áp dụng ngay:
+
+| Option | Giá trị hợp lệ | Mô tả |
+|---|---|---|
+| `facingMode` | `environment` / `user` | Camera sau / trước |
+| `width` | `160`–`4096` | Chiều rộng mong muốn (px) |
+| `height` | `160`–`4096` | Chiều cao mong muốn (px) |
+| `frameRate` | `1`–`120` | Khung hình/giây |
+| `audio` | `true/false` | Gửi kèm mic của điện thoại. Mặc định tắt |
+| `maxBitrate` | `100000`–`20000000` | Trần bitrate (bit/s). Cao = nét hơn, cần băng thông tốt |
+
+Giá trị ngoài dải sẽ bị server **từ chối** và giữ nguyên giá trị cũ.
+
+Ba cách chỉnh, tất cả đều tự lưu và đồng bộ cho nhau:
+- **`control.html`** — đầy đủ nhất, mở được trên điện thoại
+- **Nút trên viewer** — flip/rotate nhanh. **Double click** lên màn hình để hiện lại controls khi đã ẩn
+- **Quick bar trên phone** — flip cam, đèn, flip H/V, xoay, settings
+
+---
+
+## Điều khiển camera trên phone
+
+Ngoài flip/xoay, trang phone còn chạm được vào **năng lực phần cứng thật** của camera — nhưng chỉ hiện nút khi máy báo là có hỗ trợ:
+
+| Điều khiển | Hiện khi | Ghi chú |
+|---|---|---|
+| 🔦 **Đèn (torch)** | `getCapabilities().torch` | Android Chrome hầu hết có; camera trước thường không |
+| 🔍 **Zoom** | `getCapabilities().zoom` | Thanh trượt hiện phía trên quick bar |
+
+> **Không có "làm đẹp" / xoá phông.** Trình duyệt mở camera qua tầng hệ điều hành, không đi qua app Camera của hãng — nên các chế độ làm mịn da, chân dung, AI scene của Samsung/Xiaomi/OPPO đều không dùng được từ web. Muốn có thì phải tự xử lý ảnh (ở viewer bằng CSS filter / WebGL, hoặc dùng filter sẵn có của OBS).
+
+---
+
+## Thông số thực tế (viewer)
+
+Thanh điều khiển của viewer hiện `độ phân giải · fps · bitrate` **đang thực sự nhận được**, cập nhật mỗi 2 giây. Con số này thường **thấp hơn** giá trị đặt trong config vì WebRTC tự bóp băng thông khi mạng yếu — dùng nó để biết có nên tăng/giảm bitrate hay không, thay vì chỉnh mò.
 
 ---
 
@@ -208,6 +289,17 @@ OBS Browser Source bị throttle. Trong Thuộc tính Browser Source:
 
 Phone và viewer dùng 2 server khác nhau (HTTP vs HTTPS). Server đã có bridge tự động — chỉ cần restart server và kết nối lại.
 
+### Phone quét QR WiFi nhưng không vào được trang
+
+Thường do máy có nhiều card mạng (Docker, WSL, VirtualBox, VMware, VPN, hoặc cắm dây LAN song song WiFi) → server đoán nhầm IP và in QR trỏ vào card ảo mà phone không tới được.
+
+- Terminal sẽ liệt kê **tất cả IP LAN** khi phát hiện nhiều hơn một (card ảo có ghi chú `(card ảo)`)
+- Vào `http://localhost:7070` → chọn IP khác trong dropdown dưới QR WiFi → QR tự đổi theo
+
+### Phone báo 401 Unauthorized
+
+Thiết bị trong LAN cần token. Quét lại QR WiFi trong terminal (QR đã kèm token), hoặc copy URL đầy đủ mà terminal in ra. Xem mục [Xác thực (token)](#xác-thực-token).
+
 ### Video lag
 
 - Ưu tiên dùng WiFi 5GHz
@@ -218,28 +310,32 @@ Phone và viewer dùng 2 server khác nhau (HTTP vs HTTPS). Server đã có brid
 
 ## Lệnh hữu ích
 
+### macOS / Linux
+
 ```bash
 # Khởi động server
-node server.js
+npm start
 
 # Kill server
 lsof -ti:7070,7443 | xargs kill -9
 
 # ADB reverse (USB mode)
-~/Library/Android/sdk/platform-tools/adb reverse tcp:7070 tcp:7070
+adb reverse tcp:7070 tcp:7070
 
 # Xem camera đang được app nào giữ
-~/Library/Android/sdk/platform-tools/adb shell dumpsys media.camera | grep -i "active\|connect"
+adb shell dumpsys media.camera | grep -i "active\|connect"
 
 # Tìm overlay app đang chặn camera
-~/Library/Android/sdk/platform-tools/adb shell dumpsys window windows | grep mAlertWindowSurfaces
+adb shell dumpsys window windows | grep mAlertWindowSurfaces
 ```
+
+> Nếu `adb` chưa có trong PATH, dùng đường dẫn đầy đủ `~/Library/Android/sdk/platform-tools/adb`.
 
 ### Lệnh hữu ích (Windows)
 
 ```powershell
 # Khởi động server
-node server.js
+npm start
 
 # Kill server (tìm PID rồi kill)
 netstat -ano | findstr "7070 7443"
@@ -258,6 +354,34 @@ adb shell dumpsys window windows | findstr mAlertWindowSurfaces
 ---
 
 ## Changelog
+
+### 2026-07-27
+**Sửa lỗi**
+- Viewer tự phục hồi khi phone rớt rồi kết nối lại (trước đây phải F5 thủ công)
+- `phone_disconnected` chỉ bắn khi đúng phone rớt — viewer đóng tab không còn làm viewer khác báo mất kết nối
+- Dropdown chọn camera trên phone giờ hiện đúng tên (trước đây luôn rỗng do đọc trước khi được cấp quyền)
+- ICE candidate được xếp hàng thay vì ném lỗi khi tới trước SDP
+- Không dựng lại peer connection khi đang bắt tay → hết tình trạng không kết nối được trên mạng chậm
+- Xoay 90°/270° trên viewer không còn méo/crop hình
+- Ghi `config.json` atomic, giá trị sai kiểu hoặc ngoài dải bị từ chối thay vì ghi đè
+- Port bận báo lỗi rõ ràng thay vì stack trace
+
+**Bảo mật**
+- Thiết bị trong LAN cần token để truy cập (localhost được miễn); token lưu `.token`, giữ nguyên qua các lần restart
+- Cert tạo bởi `npm run init` có `subjectAltName` — cảnh báo nếu cert cũ thiếu SAN hoặc lệch IP
+
+**Tính năng mới**
+- **Nhiều viewer cùng lúc** — phone giữ một kết nối riêng cho mỗi viewer (trước đây viewer thứ 2 làm hỏng viewer thứ 1)
+- **Mic** — tuỳ chọn gửi kèm tiếng từ điện thoại (mặc định tắt)
+- **Đèn flash + zoom** trên phone, tự ẩn nếu camera không hỗ trợ
+- **Thông số thực tế** trên viewer: độ phân giải · fps · bitrate đang nhận, cập nhật mỗi 2s
+- **ICE restart** — thử phục hồi kết nối khi đổi mạng trước khi bỏ hẳn
+
+**Khác**
+- `config.json` bỏ khỏi git, server tự tạo khi thiếu
+- Chọn IP LAN trên trang chủ khi máy có nhiều card mạng
+- Đổi port bằng `PORT` / `HTTPS_PORT`; graceful shutdown khi Ctrl+C; thêm `npm run dev`
+- Tên event signaling gom về `public/shared.js`, dùng chung server và client
 
 ### 2026-06-18
 - Thêm quick bar ở phone: flip cam, flip H/V, xoay, settings
@@ -283,3 +407,12 @@ adb shell dumpsys window windows | findstr mAlertWindowSurfaces
 |---|---|---|
 | 7070 | HTTP | USB mode, Viewer PC |
 | 7443 | HTTPS | WiFi mode |
+
+---
+
+## Tài liệu kỹ thuật
+
+| File | Nội dung |
+|---|---|
+| [docs/ARCHITECTURE_AUDIT.md](docs/ARCHITECTURE_AUDIT.md) | Kiến trúc **hiện tại**: module, protocol signaling, use-case, rủi ro còn lại, sơ đồ luồng |
+| [docs/FINDINGS-2026-07-27.md](docs/FINDINGS-2026-07-27.md) | Nhật ký rà soát 2026-07-27: từng lỗi đã sửa, nguyên nhân gốc, cách kiểm chứng |

@@ -165,6 +165,27 @@
   .qbtn.active .icon { background: #3b82f6; }
   .qbtn.active span { color: #93c5fd; }
 
+  /* Zoom slider — ẩn mặc định, chỉ hiện khi getCapabilities() báo có zoom */
+  #zoomBar {
+    display: none;
+    position: fixed;
+    bottom: 92px;
+    left: 16px; right: 16px;
+    align-items: center;
+    gap: 10px;
+    background: rgba(10,10,10,0.75);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255,255,255,0.08);
+    padding: 8px 14px;
+    border-radius: 14px;
+    z-index: 16;
+  }
+  #zoomBar.show { display: flex; }
+  #zoomBar .zoom-ico { font-size: 14px; }
+  #zoomRange { flex: 1; accent-color: #3b82f6; }
+  #zoomLabel { font-size: 12px; color: #aaa; min-width: 38px; text-align: right; }
+
   /* Settings panel */
   #settingsPanel {
     display: none;
@@ -279,11 +300,22 @@
   </button>
 </div>
 
+<!-- Zoom slider — chỉ hiện khi camera hỗ trợ -->
+<div id="zoomBar">
+  <span class="zoom-ico">🔍</span>
+  <input type="range" id="zoomRange" min="1" max="1" step="0.1" value="1">
+  <span id="zoomLabel">1.0×</span>
+</div>
+
 <!-- Quick bar -->
 <div id="quickBar">
   <button class="qbtn" id="qFlipCam">
     <div class="icon">🔄</div>
     <span>Flip cam</span>
+  </button>
+  <button class="qbtn" id="qTorch" style="display:none">
+    <div class="icon">🔦</div>
+    <span>Đèn</span>
   </button>
   <button class="qbtn" id="qFlipH">
     <div class="icon">⇔</div>
@@ -354,6 +386,17 @@
 
     <div class="cfg-row">
       <div>
+        <div class="cfg-row-label">Mic</div>
+        <div class="cfg-row-sub">gửi kèm tiếng từ điện thoại</div>
+      </div>
+      <select id="cfg-audio">
+        <option value="false">Tắt</option>
+        <option value="true">Bật</option>
+      </select>
+    </div>
+
+    <div class="cfg-row">
+      <div>
         <div class="cfg-row-label">Bitrate</div>
         <div class="cfg-row-sub">cao = nét hơn, cần băng thông tốt</div>
       </div>
@@ -412,24 +455,36 @@
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
+<script src="/shared.js"></script>
 <script>
-const ROOM = 'facecam'
+const { ROOM, ROLE, EV, RTC_CONFIG, fetchConfig, saveConfig } = FaceCam
 const socket = io()
 const statusEl = document.getElementById('status')
 const preview = document.getElementById('preview')
 const camSelect = document.getElementById('camSelect')
 const settingsPanel = document.getElementById('settingsPanel')
 
-let pc = null
+// Một peer connection cho mỗi viewer: viewerId -> { pc, pendingIce }
+// Trước đây chỉ giữ đúng một `pc` nên viewer thứ hai vào là hai answer cùng đổ về
+// một connection → hỏng luôn cả viewer đầu.
+const peers = new Map()
 let localStream = null
 let facingMode = 'environment'
-let phoneCfg = { facingMode: 'environment', width: 1280, height: 720, frameRate: 30, maxBitrate: 4000000 }
+let phoneCfg = { facingMode: 'environment', width: 1280, height: 720, frameRate: 30, maxBitrate: 4000000, audio: false }
 let cfg = {}
 
 function setStatus(text, state = '') {
-  statusEl.querySelector('.dot') || (statusEl.innerHTML = '<div class="dot"></div> ')
-  statusEl.childNodes[statusEl.childNodes.length - 1].textContent = ' ' + text
+  statusEl.innerHTML = '<div class="dot"></div>'
+  statusEl.append(' ' + text)
   statusEl.className = state
+}
+
+// Trạng thái phản ánh số viewer đang thực sự nhận hình
+function refreshStreamStatus() {
+  const live = [...peers.values()].filter(p => p.pc.connectionState === 'connected').length
+  if (live > 0) setStatus(live === 1 ? 'Đang stream' : `Đang stream (${live} viewer)`, 'connected')
+  else if (peers.size > 0) setStatus('Đang kết nối...')
+  else if (localStream) setStatus('Chờ viewer kết nối...')
 }
 
 function loadCfgToUI(c) {
@@ -441,6 +496,7 @@ function loadCfgToUI(c) {
   document.getElementById('cfg-width').value = phoneCfg.width
   document.getElementById('cfg-height').value = phoneCfg.height
   document.getElementById('cfg-frameRate').value = phoneCfg.frameRate
+  document.getElementById('cfg-audio').value = String(!!phoneCfg.audio)
   document.getElementById('cfg-maxBitrate').value = String(phoneCfg.maxBitrate)
   document.getElementById('cfg-flipH').value = String(c.flipH ?? false)
   document.getElementById('cfg-flipV').value = String(c.flipV ?? false)
@@ -448,12 +504,12 @@ function loadCfgToUI(c) {
   document.getElementById('cfg-hideControls').value = String(c.hideControls ?? false)
 }
 
-fetch('/api/config').then(r => r.json()).then(c => {
+fetchConfig().then(c => {
   loadCfgToUI(c)
   document.getElementById('qFlipH').classList.toggle('active', !!c.flipH)
   document.getElementById('qFlipV').classList.toggle('active', !!c.flipV)
   document.getElementById('rotLabel').textContent = (c.rotation ?? 0) + '°'
-})
+}).catch(e => setStatus('❌ Không tải được config: ' + e.message, 'error'))
 
 document.getElementById('closeSettings').addEventListener('click', () => settingsPanel.classList.remove('open'))
 
@@ -468,20 +524,23 @@ document.getElementById('saveBtn').addEventListener('click', async () => {
       width: Number(document.getElementById('cfg-width').value),
       height: Number(document.getElementById('cfg-height').value),
       frameRate: Number(document.getElementById('cfg-frameRate').value),
+      audio: document.getElementById('cfg-audio').value === 'true',
       maxBitrate: Number(document.getElementById('cfg-maxBitrate').value),
     }
   }
-  await fetch('/api/config', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(updated)
-  })
-  loadCfgToUI(updated)
-  settingsPanel.classList.remove('open')
-  setStatus('✅ Đã lưu — restart stream để áp dụng camera')
-  socket.emit('config_updated')
+  try {
+    await saveConfig(updated)
+    loadCfgToUI(updated)
+    settingsPanel.classList.remove('open')
+    setStatus('✅ Đã lưu — bật lại camera để áp dụng độ phân giải')
+    socket.emit(EV.CONFIG_UPDATED)
+  } catch (e) {
+    setStatus('❌ Lưu config thất bại: ' + e.message, 'error')
+  }
 })
 
+// Chỉ gọi được sau khi getUserMedia đã được cấp quyền — trước đó browser trả về
+// device.label rỗng, dropdown sẽ chỉ hiện "Camera 1/2/3".
 async function getCameras() {
   const devices = await navigator.mediaDevices.enumerateDevices()
   const cams = devices.filter(d => d.kind === 'videoinput')
@@ -494,30 +553,34 @@ async function getCameras() {
               : label.includes('back') || label.includes('rear') || label.includes('environment') ? '📷'
               : '📹'
     opt.textContent = `${tag} ${cam.label || `Camera ${i + 1}`}`
-    if (phoneCfg.facingMode === 'environment' && (label.includes('back') || label.includes('rear'))) opt.selected = true
     camSelect.appendChild(opt)
   })
+  // Đồng bộ dropdown với camera đang thực sự mở, thay vì đoán qua tên label
+  const activeId = localStream?.getVideoTracks()[0]?.getSettings().deviceId
+  if (activeId) camSelect.value = activeId
 }
 
 async function startStream(deviceId) {
   if (localStream) localStream.getTracks().forEach(t => t.stop())
-  const constraints = {
-    video: deviceId
-      ? { deviceId: { exact: deviceId }, width: { ideal: phoneCfg.width }, height: { ideal: phoneCfg.height }, frameRate: { ideal: phoneCfg.frameRate } }
-      : { facingMode, width: { ideal: phoneCfg.width }, height: { ideal: phoneCfg.height }, frameRate: { ideal: phoneCfg.frameRate } },
-    audio: false
-  }
-  localStream = await navigator.mediaDevices.getUserMedia(constraints)
+  const video = deviceId
+    ? { deviceId: { exact: deviceId }, width: { ideal: phoneCfg.width }, height: { ideal: phoneCfg.height }, frameRate: { ideal: phoneCfg.frameRate } }
+    : { facingMode, width: { ideal: phoneCfg.width }, height: { ideal: phoneCfg.height }, frameRate: { ideal: phoneCfg.frameRate } }
+  // Mic tắt mặc định (dùng làm webcam là chính) — bật qua config nếu cần
+  localStream = await navigator.mediaDevices.getUserMedia({ video, audio: !!phoneCfg.audio })
   preview.srcObject = localStream
-  if (pc) {
+  await getCameras()
+  await refreshCameraControls()
+
+  // Đổi camera giữa chừng: thay track ở mọi viewer đang xem, không dựng lại connection
+  const videoTrack = localStream.getVideoTracks()[0]
+  for (const { pc } of peers.values()) {
     const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video')
-    if (sender) { await sender.replaceTrack(localStream.getVideoTracks()[0]); await tuneVideoSender() }
+    if (sender) { await sender.replaceTrack(videoTrack); await tuneVideoSender(pc) }
   }
 }
 
 // Ưu tiên độ nét cho video sender. Trần bitrate lấy từ config (mặc định WebRTC bóp xuống ~1-2.5Mbps gây mờ)
-async function tuneVideoSender() {
-  if (!pc) return
+async function tuneVideoSender(pc) {
   const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video')
   if (!sender) return
   if (sender.track) sender.track.contentHint = 'detail'  // ưu tiên nét hơn mượt
@@ -528,26 +591,54 @@ async function tuneVideoSender() {
   try { await sender.setParameters(params) } catch (e) { console.warn('tuneVideoSender failed', e) }
 }
 
-async function createPeer() {
-  if (pc) { pc.close(); pc = null }
-  pc = new RTCPeerConnection({ iceServers: [] })
+function closePeer(viewerId) {
+  const entry = peers.get(viewerId)
+  if (!entry) return
+  entry.pc.close()
+  peers.delete(viewerId)
+  refreshStreamStatus()
+}
+
+async function createPeerFor(viewerId) {
+  closePeer(viewerId)
+  const pc = new RTCPeerConnection(RTC_CONFIG)
+  const entry = { pc, pendingIce: [], iceRestarted: false }
+  peers.set(viewerId, entry)
+
   localStream.getTracks().forEach(t => pc.addTrack(t, localStream))
-  await tuneVideoSender()
+  await tuneVideoSender(pc)
+
   pc.onicecandidate = ({ candidate }) => {
-    if (candidate) socket.emit('ice', { room: ROOM, candidate })
+    if (candidate) socket.emit(EV.ICE, { to: viewerId, candidate })
   }
-  pc.onconnectionstatechange = () => {
-    if (pc.connectionState === 'connected') setStatus('Đang stream', 'connected')
-    else if (['disconnected', 'failed'].includes(pc.connectionState)) setStatus('Mất kết nối', 'error')
+  pc.onconnectionstatechange = async () => {
+    refreshStreamStatus()
+    if (pc.connectionState === 'failed') {
+      // Đổi mạng (WiFi ↔ 4G, đổi AP) làm ICE chết mà SDP vẫn dùng lại được →
+      // thử restart ICE một lần trước khi bỏ hẳn connection
+      if (!entry.iceRestarted) {
+        entry.iceRestarted = true
+        try {
+          const offer = await pc.createOffer({ iceRestart: true })
+          await pc.setLocalDescription(offer)
+          socket.emit(EV.OFFER, { to: viewerId, sdp: offer })
+          console.warn('ICE restart cho viewer', viewerId)
+          return
+        } catch (e) { console.warn('ICE restart thất bại:', e.message) }
+      }
+      closePeer(viewerId)
+    }
   }
+
   const offer = await pc.createOffer()
   await pc.setLocalDescription(offer)
-  socket.emit('offer', { room: ROOM, sdp: offer })
+  socket.emit(EV.OFFER, { to: viewerId, sdp: offer })
 }
 
 socket.on('connect', () => {
-  socket.emit('join', ROOM)
-  setStatus('Nhấn nút để bật camera')
+  socket.emit(EV.JOIN, { room: ROOM, role: ROLE.PHONE })
+  // Đang stream mà socket reconnect thì đừng ghi đè trạng thái "Đang stream"
+  if (!localStream) setStatus('Nhấn nút để bật camera')
 })
 
 // Giữ màn hình sáng khi đang stream (chống điện thoại tự sleep → ngắt camera)
@@ -570,12 +661,15 @@ document.getElementById('startBtn').addEventListener('click', async () => {
   btn.disabled = true
   btn.innerHTML = '<span>⏳</span> Đang mở...'
   try {
-    await getCameras()
+    // startStream() phải chạy trước: getCameras() nằm trong đó và chỉ đọc được
+    // tên camera sau khi quyền đã được cấp
     await startStream()
     await keepAwake()
     document.getElementById('startOverlay').style.display = 'none'
     document.getElementById('camBar').style.display = 'flex'
     setStatus('Chờ viewer kết nối...')
+    // Viewer nào đã mở sẵn và đang chờ sẽ hỏi lại ngay khi nghe event này
+    socket.emit(EV.PHONE_READY)
   } catch (e) {
     btn.disabled = false
     btn.innerHTML = '<svg viewBox="0 0 24 24" style="width:20px;height:20px;fill:#fff"><path d="M8 5v14l11-7z"/></svg> Bật Camera'
@@ -583,18 +677,60 @@ document.getElementById('startBtn').addEventListener('click', async () => {
   }
 })
 
-socket.on('answer', async ({ sdp }) => { if (pc) await pc.setRemoteDescription(new RTCSessionDescription(sdp)) })
-socket.on('ice', async ({ candidate }) => { if (pc) await pc.addIceCandidate(new RTCIceCandidate(candidate)) })
-socket.on('request_stream', async () => { if (localStream) await createPeer() })
+// Candidate có thể tới trước answer. Add sớm sẽ ném InvalidStateError và mất
+// candidate luôn → xếp hàng rồi nạp sau khi có remote description.
+async function flushIce(entry) {
+  const queued = entry.pendingIce
+  entry.pendingIce = []
+  for (const candidate of queued) {
+    try { await entry.pc.addIceCandidate(new RTCIceCandidate(candidate)) }
+    catch (e) { console.warn('addIceCandidate (hàng đợi) thất bại:', e.message) }
+  }
+}
+
+socket.on(EV.ANSWER, async ({ from, sdp }) => {
+  const entry = peers.get(from)
+  if (!entry) return
+  try {
+    await entry.pc.setRemoteDescription(new RTCSessionDescription(sdp))
+    await flushIce(entry)
+  } catch (e) {
+    console.error('setRemoteDescription thất bại:', e)
+    setStatus('❌ Bắt tay lỗi — thử bật lại camera', 'error')
+  }
+})
+
+socket.on(EV.ICE, async ({ from, candidate }) => {
+  const entry = peers.get(from)
+  if (!entry) return
+  if (!entry.pc.remoteDescription) { entry.pendingIce.push(candidate); return }
+  try { await entry.pc.addIceCandidate(new RTCIceCandidate(candidate)) }
+  catch (e) { console.warn('addIceCandidate thất bại:', e.message) }
+})
+
+socket.on(EV.VIEWER_REQUEST, async ({ from }) => {
+  if (!localStream || !from) return
+  // Đang bắt tay thì bỏ qua: viewer retry mỗi 5s, nếu lần nào cũng dựng lại peer
+  // thì trên mạng chậm sẽ không bao giờ kết nối xong. 'connected' vẫn cho tạo lại
+  // để viewer vừa F5 lấy được offer mới.
+  const existing = peers.get(from)
+  if (existing && ['new', 'connecting'].includes(existing.pc.connectionState)) return
+  await createPeerFor(from)
+})
+
+// Viewer đóng tab → dọn peer connection tương ứng, không thì connection chết
+// cứ tích lại cho tới khi đóng trang phone
+socket.on(EV.VIEWER_LEFT, ({ id }) => closePeer(id))
 
 // Config đổi từ control.html / viewer → nạp lại để lần bật camera kế tiếp dùng giá trị mới
-socket.on('config_updated', async () => {
-  const c = await fetch('/api/config').then(r => r.json())
+socket.on(EV.CONFIG_UPDATED, async () => {
+  const c = await fetchConfig()
   loadCfgToUI(c)
   document.getElementById('qFlipH').classList.toggle('active', !!c.flipH)
   document.getElementById('qFlipV').classList.toggle('active', !!c.flipV)
   document.getElementById('rotLabel').textContent = (c.rotation ?? 0) + '°'
-  if (localStream) await tuneVideoSender()  // bitrate áp ngay; res/fps cần bật lại camera
+  // bitrate áp ngay cho mọi viewer; res/fps cần bật lại camera
+  for (const { pc } of peers.values()) await tuneVideoSender(pc)
 })
 
 camSelect.addEventListener('change', () => startStream(camSelect.value))
@@ -602,9 +738,72 @@ camSelect.addEventListener('change', () => startStream(camSelect.value))
 function saveViewerCfg(patch) {
   const updated = { ...cfg, ...patch }
   cfg = updated
-  fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updated) })
-  socket.emit('config_updated')
+  saveConfig(updated).catch(e => console.warn('Lưu config thất bại:', e.message))
+  socket.emit(EV.CONFIG_UPDATED)
 }
+
+// ── Điều khiển phần cứng camera (zoom / đèn) ────────────────────────────────
+// Web không chạm được vào chế độ "làm đẹp" hay xoá phông của app Camera hãng —
+// những cái đó nằm trong app OEM. Nhưng zoom/torch là năng lực thật của camera,
+// mỗi máy hỗ trợ một tập khác nhau nên bắt buộc phải feature-detect.
+const zoomBar = document.getElementById('zoomBar')
+const zoomRange = document.getElementById('zoomRange')
+const zoomLabel = document.getElementById('zoomLabel')
+const torchBtn = document.getElementById('qTorch')
+let torchOn = false
+
+function videoTrack() {
+  return localStream?.getVideoTracks()[0] ?? null
+}
+
+async function refreshCameraControls() {
+  const track = videoTrack()
+  torchOn = false
+  torchBtn.classList.remove('active')
+  if (!track || typeof track.getCapabilities !== 'function') {
+    zoomBar.classList.remove('show')
+    torchBtn.style.display = 'none'
+    return
+  }
+  const caps = track.getCapabilities()
+
+  if (caps.zoom) {
+    zoomRange.min = caps.zoom.min
+    zoomRange.max = caps.zoom.max
+    zoomRange.step = caps.zoom.step || 0.1
+    const current = track.getSettings().zoom ?? caps.zoom.min
+    zoomRange.value = current
+    zoomLabel.textContent = Number(current).toFixed(1) + '×'
+    zoomBar.classList.add('show')
+  } else {
+    zoomBar.classList.remove('show')
+  }
+
+  torchBtn.style.display = caps.torch ? '' : 'none'
+}
+
+zoomRange.addEventListener('input', async () => {
+  const track = videoTrack()
+  if (!track) return
+  zoomLabel.textContent = Number(zoomRange.value).toFixed(1) + '×'
+  try { await track.applyConstraints({ advanced: [{ zoom: Number(zoomRange.value) }] }) }
+  catch (e) { console.warn('Đặt zoom thất bại:', e.message) }
+})
+
+torchBtn.addEventListener('click', async () => {
+  const track = videoTrack()
+  if (!track) return
+  torchOn = !torchOn
+  try {
+    await track.applyConstraints({ advanced: [{ torch: torchOn }] })
+    torchBtn.classList.toggle('active', torchOn)
+  } catch (e) {
+    // Một số máy khai báo có torch nhưng từ chối khi camera trước đang bật
+    torchOn = !torchOn
+    console.warn('Bật/tắt đèn thất bại:', e.message)
+    setStatus('❌ Không bật được đèn trên camera này', 'error')
+  }
+})
 
 document.getElementById('qFlipCam').addEventListener('click', async () => {
   facingMode = facingMode === 'environment' ? 'user' : 'environment'

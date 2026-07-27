@@ -158,6 +158,14 @@
   </div>
 
   <div class="row">
+    <div><div class="row-label">Mic</div><div class="row-sub">gửi kèm tiếng từ điện thoại</div></div>
+    <div class="btns">
+      <button class="tbtn" data-toggle="audio" data-scope="phone" data-val="false">Tắt</button>
+      <button class="tbtn" data-toggle="audio" data-scope="phone" data-val="true">Bật</button>
+    </div>
+  </div>
+
+  <div class="row">
     <div><div class="row-label">Bitrate</div><div class="row-sub">cao = nét hơn</div></div>
     <select id="maxBitrate">
       <option value="2000000">2 Mbps (thấp)</option>
@@ -180,14 +188,20 @@
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
+<script src="/shared.js"></script>
 <script>
+const { ROOM, ROLE, EV, fetchConfig, saveConfig } = FaceCam
 const socket = io()
 const statusEl = document.getElementById('status')
 const statusText = document.getElementById('statusText')
 
+// Phải join room thì server mới relay được config_updated đi/về — trước đây
+// trang này không join nên không nhận được thay đổi từ phone/viewer
+socket.on('connect', () => socket.emit(EV.JOIN, { room: ROOM, role: ROLE.CONTROL }))
+
 // config hiện tại (giữ đầy đủ để POST không làm mất field nào)
 let cfg = { flipH: false, flipV: false, rotation: 0, hideControls: false,
-  phone: { facingMode: 'environment', width: 1280, height: 720, frameRate: 30, maxBitrate: 4000000 } }
+  phone: { facingMode: 'environment', width: 1280, height: 720, frameRate: 30, maxBitrate: 4000000, audio: false } }
 
 let saveTimer = null
 function setStatus(text, saved = false) {
@@ -198,18 +212,19 @@ function setStatus(text, saved = false) {
 // Gửi config lên server + báo viewer cập nhật (debounce nhẹ cho input số)
 function pushConfig(immediate = true) {
   const send = () => {
-    fetch('/api/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(cfg)
-    }).then(() => {
-      socket.emit('config_updated')
+    saveConfig(cfg).then(() => {
+      socket.emit(EV.CONFIG_UPDATED)
       setStatus('✅ Đã lưu & đồng bộ viewer', true)
-    }).catch(() => setStatus('❌ Lỗi lưu config'))
+    }).catch(e => setStatus('❌ Lỗi lưu config: ' + e.message))
   }
   clearTimeout(saveTimer)
   if (immediate) send()
   else saveTimer = setTimeout(send, 400)
+}
+
+// data-scope="phone" trỏ vào cfg.phone (mic), không có thì là field cấp gốc
+function toggleTarget(btn) {
+  return btn.dataset.scope === 'phone' ? cfg.phone : cfg
 }
 
 // Cập nhật trạng thái active của các nút toggle theo cfg
@@ -217,7 +232,8 @@ function refreshToggles() {
   document.querySelectorAll('.tbtn[data-toggle]').forEach(btn => {
     const key = btn.dataset.toggle
     const val = btn.dataset.val
-    const cur = String(key === 'rotation' ? (cfg.rotation ?? 0) : (cfg[key] ?? false))
+    const obj = toggleTarget(btn)
+    const cur = String(key === 'rotation' ? (obj.rotation ?? 0) : (obj[key] ?? false))
     btn.classList.toggle('active', cur === val)
   })
 }
@@ -228,7 +244,7 @@ function loadIntoUI(c) {
     flipV: c.flipV ?? false,
     rotation: c.rotation ?? 0,
     hideControls: c.hideControls ?? false,
-    phone: { facingMode: 'environment', width: 1280, height: 720, frameRate: 30, maxBitrate: 4000000, ...(c.phone || {}) }
+    phone: { facingMode: 'environment', width: 1280, height: 720, frameRate: 30, maxBitrate: 4000000, audio: false, ...(c.phone || {}) }
   }
   refreshToggles()
   document.getElementById('facingMode').value = cfg.phone.facingMode
@@ -243,9 +259,10 @@ function loadIntoUI(c) {
 document.querySelectorAll('.tbtn[data-toggle]').forEach(btn => {
   btn.addEventListener('click', () => {
     const key = btn.dataset.toggle
-    let val = btn.dataset.val
-    if (key === 'rotation') cfg.rotation = Number(val)
-    else cfg[key] = (val === 'true')
+    const val = btn.dataset.val
+    const obj = toggleTarget(btn)
+    if (key === 'rotation') obj.rotation = Number(val)
+    else obj[key] = (val === 'true')
     refreshToggles()
     pushConfig()
   })
@@ -255,15 +272,23 @@ document.querySelectorAll('.tbtn[data-toggle]').forEach(btn => {
 document.getElementById('facingMode').addEventListener('change', e => { cfg.phone.facingMode = e.target.value; pushConfig() })
 document.getElementById('frameRate').addEventListener('change', e => { cfg.phone.frameRate = Number(e.target.value); pushConfig() })
 document.getElementById('maxBitrate').addEventListener('change', e => { cfg.phone.maxBitrate = Number(e.target.value); pushConfig() })
-document.getElementById('width').addEventListener('input', e => { cfg.phone.width = Number(e.target.value); pushConfig(false) })
-document.getElementById('height').addEventListener('input', e => { cfg.phone.height = Number(e.target.value); pushConfig(false) })
+// Event 'input' bắn cả lúc đang gõ dở / ô rỗng → Number('') = 0 sẽ ghi width: 0
+// vào config và làm getUserMedia hỏng. Chỉ gửi khi giá trị nằm trong dải hợp lệ.
+function onSizeInput(key, value) {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n < 160 || n > 4096) return
+  cfg.phone[key] = n
+  pushConfig(false)
+}
+document.getElementById('width').addEventListener('input', e => onSizeInput('width', e.target.value))
+document.getElementById('height').addEventListener('input', e => onSizeInput('height', e.target.value))
 
 // load lần đầu
-fetch('/api/config').then(r => r.json()).then(loadIntoUI).catch(() => setStatus('❌ Không tải được config'))
+fetchConfig().then(loadIntoUI).catch(e => setStatus('❌ Không tải được config: ' + e.message))
 
 // nếu phone/viewer đổi config từ nơi khác → đồng bộ lại UI control
-socket.on('config_updated', () => {
-  fetch('/api/config').then(r => r.json()).then(loadIntoUI)
+socket.on(EV.CONFIG_UPDATED, () => {
+  fetchConfig().then(loadIntoUI).catch(e => console.warn('Sync config thất bại:', e.message))
 })
 </script>
 </body>

@@ -114,6 +114,16 @@
     font-family: monospace;
   }
 
+  #ipSelect {
+    background: #1a1a1a;
+    border: 1px solid #2a2a2a;
+    color: #aaa;
+    font-size: 11px;
+    padding: 5px 8px;
+    border-radius: 8px;
+    max-width: 190px;
+  }
+
   .hint {
     display: flex;
     align-items: center;
@@ -211,6 +221,7 @@
     </div>
     <div class="qr-wrap"><img id="wifiQR" alt="QR WiFi"></div>
     <div class="url" id="wifiURL">...</div>
+    <select id="ipSelect" style="display:none"></select>
     <div class="hint"><div class="hint-dot"></div> Accept cert khi mở lần đầu</div>
   </div>
 </div>
@@ -233,11 +244,37 @@
 </p>
 
 <script>
-fetch('/api/urls').then(r => r.json()).then(data => {
+const ipSelect = document.getElementById('ipSelect')
+
+function render(data) {
   document.getElementById('usbQR').src = data.usbQR
   document.getElementById('wifiQR').src = data.wifiQR
   document.getElementById('usbURL').textContent = data.usbURL
   document.getElementById('wifiURL').textContent = data.wifiURL
+}
+
+// Máy chỉ có 1 card mạng thì giấu hẳn dropdown — chỉ hiện khi thật sự phải chọn
+// (có Docker/WSL/VirtualBox hoặc cắm LAN song song WiFi thì IP đoán ra hay sai)
+function buildIpPicker(ips, current) {
+  if (!ips || ips.length < 2) return
+  ipSelect.innerHTML = ''
+  for (const i of ips) {
+    const opt = document.createElement('option')
+    opt.value = i.address
+    opt.textContent = `${i.address} — ${i.name}${i.virtual ? ' (ảo)' : ''}`
+    if (i.address === current) opt.selected = true
+    ipSelect.appendChild(opt)
+  }
+  ipSelect.style.display = ''
+}
+
+fetch('/api/urls').then(r => r.json()).then(data => {
+  render(data)
+  buildIpPicker(data.ips, data.ip)
+})
+
+ipSelect.addEventListener('change', () => {
+  fetch(`/api/urls?ip=${encodeURIComponent(ipSelect.value)}`).then(r => r.json()).then(render)
 })
 </script>
 </body>

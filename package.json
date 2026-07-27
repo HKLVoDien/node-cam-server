@@ -5,11 +5,15 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "dev": "node --watch server.js",
     "init": "node init.js"
   },
   "keywords": ["webcam", "webrtc", "facecam"],
-  "author": "",
+  "author": "DienJVo",
   "license": "ISC",
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "express": "^5.2.1",
     "qrcode": "^1.5.4",

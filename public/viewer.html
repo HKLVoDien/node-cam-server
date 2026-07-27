@@ -8,7 +8,7 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { background: #000; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 
-  video { width: 100vw; height: 100vh; object-fit: contain; transition: transform 0.2s; }
+  video { width: 100vw; height: 100vh; object-fit: cover; transition: transform 0.2s; }
 
   #controls {
     position: fixed;
@@ -60,6 +60,15 @@
     padding: 0 6px;
     white-space: nowrap;
   }
+  #stats {
+    font-size: 11px;
+    color: #555;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: nowrap;
+    padding: 0 2px;
+  }
+  #stats:empty { display: none; }
+
   #status .dot { width: 7px; height: 7px; border-radius: 50%; background: #555; flex-shrink: 0; }
   #status.live .dot { background: #22c55e; box-shadow: 0 0 6px #22c55e88; animation: pulse 2s infinite; }
   #status.error .dot { background: #ef4444; }
@@ -86,6 +95,7 @@
 
 <div id="controls">
   <div id="status"><div class="dot"></div> Chờ phone...</div>
+  <div id="stats"></div>
   <div class="ctrl-divider"></div>
   <button class="ctrl-btn" id="flipH">⇔ Flip H</button>
   <button class="ctrl-btn" id="flipV">⇕ Flip V</button>
@@ -95,37 +105,47 @@
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
+<script src="/shared.js"></script>
 <script>
-const ROOM = 'facecam'
+const { ROOM, ROLE, EV, RTC_CONFIG, fetchConfig, saveConfig } = FaceCam
 const socket = io()
 const video = document.getElementById('video')
 const statusEl = document.getElementById('status')
+const statsEl = document.getElementById('stats')
 
 let pc = null
+let phoneId = null        // socket id của phone — cần để gửi answer/ICE đích danh
 let retryTimer = null
+let statsTimer = null
+let pendingIce = []
 let fH = false, fV = false, rot = 0
 
 function applyTransform() {
+  // rotate() không đổi layout box → ở 90/270 phải hoán đổi kích thước element
+  // trước khi xoay, nếu không object-fit: cover sẽ crop/kéo giãn sai khung hình
+  const swap = rot === 90 || rot === 270
+  video.style.width = swap ? '100vh' : '100vw'
+  video.style.height = swap ? '100vw' : '100vh'
   video.style.transform = `rotate(${rot}deg) scaleX(${fH ? -1 : 1}) scaleY(${fV ? -1 : 1})`
 }
 
 function setStatus(text, state = '') {
-  statusEl.querySelector('span') ? statusEl.querySelector('span').textContent = text : statusEl.innerHTML = `<div class="dot"></div><span>${text}</span>`
-  statusEl.childNodes[statusEl.childNodes.length - 1].textContent = text
+  statusEl.innerHTML = '<div class="dot"></div>'
+  statusEl.append(text)
   statusEl.className = state
 }
 
-function saveConfig() {
-  fetch('/api/config', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ flipH: fH, flipV: fV, rotation: rot })
-  })
+// Lưu xong phải báo cho control.html/phone, nếu không UI của chúng vẫn hiện giá
+// trị cũ cho tới khi người dùng tự F5
+function pushConfig(patch) {
+  saveConfig(patch)
+    .then(() => socket.emit(EV.CONFIG_UPDATED))
+    .catch(e => console.warn('Lưu config thất bại:', e.message))
 }
 
 const controls = document.getElementById('controls')
 
-fetch('/api/config').then(r => r.json()).then(cfg => {
+fetchConfig().then(cfg => {
   fH = cfg.flipH ?? false
   fV = cfg.flipV ?? false
   rot = cfg.rotation ?? 0
@@ -133,86 +153,182 @@ fetch('/api/config').then(r => r.json()).then(cfg => {
   document.getElementById('flipV').classList.toggle('active', fV)
   if (cfg.hideControls) controls.style.display = 'none'
   applyTransform()
-})
+}).catch(e => console.warn('Không tải được config:', e.message))
 
 document.getElementById('flipH').addEventListener('click', function() {
-  fH = !fH; this.classList.toggle('active', fH); applyTransform(); saveConfig()
+  fH = !fH; this.classList.toggle('active', fH); applyTransform(); pushConfig({ flipH: fH })
 })
 document.getElementById('flipV').addEventListener('click', function() {
-  fV = !fV; this.classList.toggle('active', fV); applyTransform(); saveConfig()
+  fV = !fV; this.classList.toggle('active', fV); applyTransform(); pushConfig({ flipV: fV })
 })
 document.getElementById('rot90').addEventListener('click', function() {
-  rot = (rot + 90) % 360; applyTransform(); saveConfig()
+  rot = (rot + 90) % 360; applyTransform(); pushConfig({ rotation: rot })
 })
 document.getElementById('hideBtn').addEventListener('click', () => {
   controls.style.display = 'none'
-  fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hideControls: true }) })
+  pushConfig({ hideControls: true })
 })
 document.addEventListener('dblclick', () => {
   controls.style.display = ''
-  fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hideControls: false }) })
+  pushConfig({ hideControls: false })
 })
 
 function requestStream() {
-  socket.emit('join', ROOM)
-  socket.emit('request_stream')
+  socket.emit(EV.VIEWER_REQUEST)
+}
+
+// Hỏi lại stream mỗi 5s cho tới khi có hình. Phải gọi lại được nhiều lần (phone
+// rớt giữa chừng) nên luôn clear timer cũ trước — nếu không mỗi lần reconnect sẽ
+// chồng thêm một interval nữa.
+function startRetry() {
+  clearInterval(retryTimer)
+  retryTimer = setInterval(() => {
+    if (!video.srcObject || video.readyState === 0) requestStream()
+    else clearInterval(retryTimer)
+  }, 5000)
+}
+
+// Chất lượng thật khác con số đặt trong config: mạng yếu thì WebRTC tự bóp bitrate
+// và hạ fps. Không đo thì chỉ có thể đoán mò khi chỉnh 4/6/8 Mbps.
+let lastBytes = 0, lastStatsAt = 0
+function startStats() {
+  clearInterval(statsTimer)
+  statsTimer = setInterval(async () => {
+    if (!pc) return
+    try {
+      const report = await pc.getStats()
+      let inbound = null
+      report.forEach(s => { if (s.type === 'inbound-rtp' && s.kind === 'video') inbound = s })
+      if (!inbound) return
+
+      const now = performance.now()
+      let kbps = 0
+      if (lastStatsAt) {
+        kbps = Math.round(((inbound.bytesReceived - lastBytes) * 8) / (now - lastStatsAt))
+      }
+      lastBytes = inbound.bytesReceived
+      lastStatsAt = now
+
+      const w = inbound.frameWidth ?? video.videoWidth
+      const h = inbound.frameHeight ?? video.videoHeight
+      const fps = Math.round(inbound.framesPerSecond ?? 0)
+      statsEl.textContent = `${w}×${h} · ${fps}fps · ${kbps >= 1000 ? (kbps / 1000).toFixed(1) + ' Mbps' : kbps + ' kbps'}`
+    } catch (e) {
+      console.warn('getStats thất bại:', e.message)
+    }
+  }, 2000)
+}
+
+function stopStats() {
+  clearInterval(statsTimer)
+  lastBytes = 0
+  lastStatsAt = 0
+  statsEl.textContent = ''
 }
 
 async function keepAlive() {
-  try { await navigator.wakeLock.request('screen') } catch {}
+  // Wake Lock: chống PC ngủ khi OBS đang lấy hình. Không phải browser nào cũng có.
+  try {
+    if ('wakeLock' in navigator) await navigator.wakeLock.request('screen')
+  } catch (e) { console.warn('Wake Lock không khả dụng:', e.name) }
+
+  // Audio im lặng + vòng lặp WebGL: giữ tab khỏi bị throttle khi ẩn (OBS Browser
+  // Source). AudioContext sinh ra ở trạng thái suspended nếu chưa có user gesture
+  // → phải resume lại ở tương tác đầu tiên, không thì mẹo này vô tác dụng.
   const ctx = new AudioContext()
   const buf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate)
   const src = ctx.createBufferSource()
   src.buffer = buf; src.loop = true
   src.connect(ctx.destination); src.start()
+  const resume = () => { if (ctx.state === 'suspended') ctx.resume() }
+  document.addEventListener('visibilitychange', resume)
+  document.addEventListener('click', resume)
+  resume()
+
   const canvas = document.createElement('canvas')
   canvas.width = canvas.height = 1
+  canvas.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none'
   document.body.appendChild(canvas)
   const gl = canvas.getContext('webgl')
-  function tick() { gl.clear(gl.COLOR_BUFFER_BIT); requestAnimationFrame(tick) }
-  tick()
-  document.addEventListener('visibilitychange', () => { if (ctx.state === 'suspended') ctx.resume() })
+  // gl có thể null khi WebGL bị chặn — không check thì gl.clear() ném lỗi mỗi frame
+  if (gl) {
+    function tick() { gl.clear(gl.COLOR_BUFFER_BIT); requestAnimationFrame(tick) }
+    tick()
+  } else {
+    console.warn('WebGL không khả dụng — bỏ qua vòng lặp chống throttle')
+  }
 }
 keepAlive()
 
 socket.on('connect', () => {
-  requestStream()
-  clearInterval(retryTimer)
-  retryTimer = setInterval(() => {
-    if (!video.srcObject || video.readyState === 0) socket.emit('request_stream')
-    else clearInterval(retryTimer)
-  }, 5000)
+  // Server tự bắn VIEWER_REQUEST hộ ngay khi join, nên không cần hỏi thêm ở đây
+  socket.emit(EV.JOIN, { room: ROOM, role: ROLE.VIEWER })
+  startRetry()
 })
 
-socket.on('offer', async ({ sdp }) => {
-  if (pc) { pc.close(); pc = null }
-  pc = new RTCPeerConnection({ iceServers: [] })
-  pc.ontrack = ({ streams }) => {
-    video.srcObject = streams[0]
-    statusEl.innerHTML = '<div class="dot"></div>🟢 Đang stream'
-    statusEl.className = 'live'
+// Phone vừa vào phòng hoặc vừa bật camera → hỏi lại ngay, khỏi đợi hết chu kỳ retry
+socket.on(EV.PHONE_READY, () => requestStream())
+
+// Candidate có thể tới trước khi setRemoteDescription xong. Add sớm sẽ ném
+// InvalidStateError và mất candidate luôn → phải xếp hàng rồi nạp sau.
+async function flushIce() {
+  const queued = pendingIce
+  pendingIce = []
+  for (const candidate of queued) {
+    try { await pc.addIceCandidate(new RTCIceCandidate(candidate)) }
+    catch (e) { console.warn('addIceCandidate (hàng đợi) thất bại:', e.message) }
   }
-  pc.onicecandidate = ({ candidate }) => {
-    if (candidate) socket.emit('ice', { room: ROOM, candidate })
-  }
-  pc.onconnectionstatechange = () => {
-    if (['disconnected', 'failed'].includes(pc.connectionState)) {
-      statusEl.innerHTML = '<div class="dot"></div>Mất kết nối'
-      statusEl.className = 'error'
+}
+
+socket.on(EV.OFFER, async ({ from, sdp }) => {
+  // Offer lần đầu và offer sau ICE restart đều tới đây; chỉ dựng lại connection
+  // khi đúng là phiên mới, còn ICE restart thì tái dùng pc để không mất hình
+  const isRestart = pc && from === phoneId && pc.connectionState !== 'closed'
+  if (!isRestart) {
+    if (pc) { pc.close(); pc = null }
+    pendingIce = []
+    pc = new RTCPeerConnection(RTC_CONFIG)
+    pc.ontrack = ({ streams }) => {
+      video.srcObject = streams[0]
+      setStatus('🟢 Đang stream', 'live')
+      startStats()
+    }
+    pc.onicecandidate = ({ candidate }) => {
+      if (candidate) socket.emit(EV.ICE, { to: phoneId, candidate })
+    }
+    pc.onconnectionstatechange = () => {
+      if (['disconnected', 'failed'].includes(pc.connectionState)) {
+        setStatus('Mất kết nối', 'error')
+        stopStats()
+        startRetry()   // hỏi lại stream cho tới khi phone quay lại
+      }
     }
   }
-  await pc.setRemoteDescription(new RTCSessionDescription(sdp))
-  const answer = await pc.createAnswer()
-  await pc.setLocalDescription(answer)
-  socket.emit('answer', { room: ROOM, sdp: answer })
+  phoneId = from
+
+  try {
+    await pc.setRemoteDescription(new RTCSessionDescription(sdp))
+    await flushIce()
+    const answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+    socket.emit(EV.ANSWER, { to: from, sdp: answer })
+  } catch (e) {
+    // Offer hỏng/lệch pha → báo rõ và quay lại vòng retry thay vì treo im lặng
+    console.error('Xử lý offer thất bại:', e)
+    setStatus('Lỗi bắt tay — đang thử lại', 'error')
+    startRetry()
+  }
 })
 
-socket.on('ice', async ({ candidate }) => {
-  if (pc) await pc.addIceCandidate(new RTCIceCandidate(candidate))
+socket.on(EV.ICE, async ({ from, candidate }) => {
+  if (!pc || !pc.remoteDescription) { pendingIce.push(candidate); return }
+  if (from && phoneId && from !== phoneId) return
+  try { await pc.addIceCandidate(new RTCIceCandidate(candidate)) }
+  catch (e) { console.warn('addIceCandidate thất bại:', e.message) }
 })
 
-socket.on('config_updated', () => {
-  fetch('/api/config').then(r => r.json()).then(cfg => {
+socket.on(EV.CONFIG_UPDATED, () => {
+  fetchConfig().then(cfg => {
     fH = cfg.flipH ?? false
     fV = cfg.flipV ?? false
     rot = cfg.rotation ?? 0
@@ -220,13 +336,18 @@ socket.on('config_updated', () => {
     document.getElementById('flipV').classList.toggle('active', fV)
     controls.style.display = cfg.hideControls ? 'none' : ''
     applyTransform()
-  })
+  }).catch(e => console.warn('Không tải được config:', e.message))
 })
 
-socket.on('phone_disconnected', () => {
-  statusEl.innerHTML = '<div class="dot"></div>Phone mất kết nối'
-  statusEl.className = 'error'
+socket.on(EV.PHONE_DISCONNECTED, () => {
+  setStatus('Phone mất kết nối — đang chờ', 'error')
   controls.style.display = ''
+  // Bật lại vòng hỏi stream: trước đây retry đã tự tắt sau lần stream đầu tiên
+  // nên phone quay lại cũng không ai yêu cầu offer mới → phải F5 thủ công
+  video.srcObject = null
+  phoneId = null
+  stopStats()
+  startRetry()
 })
 </script>
 </body>
