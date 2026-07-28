@@ -27,6 +27,9 @@
     // Dọn dẹp: phone giữ một peer connection cho mỗi viewer nên cần biết ai rời đi
     VIEWER_LEFT: 'viewer_left',
     PHONE_DISCONNECTED: 'phone_disconnected',
+    // Phòng đã có phone khác giữ chỗ → phone vừa vào bị từ chối. Không có event
+    // này thì hai phone cùng offer tới một viewer và âm thầm đá nhau.
+    PHONE_BUSY: 'phone_busy',
     CONFIG_UPDATED: 'config_updated',
   }
 

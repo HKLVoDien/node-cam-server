@@ -638,6 +638,9 @@ fetchConfig().then(c => {
 document.getElementById('closeSettings').addEventListener('click', () => settingsPanel.classList.remove('open'))
 
 document.getElementById('saveBtn').addEventListener('click', async () => {
+  // Chụp giá trị cũ trước khi loadCfgToUI ghi đè phoneCfg — cần nó để biết thứ gì
+  // thật sự đổi, thay vì mở lại camera mỗi lần bấm Lưu
+  const prev = phoneCfg
   const updated = {
     flipH: document.getElementById('cfg-flipH').value === 'true',
     flipV: document.getElementById('cfg-flipV').value === 'true',
@@ -652,14 +655,44 @@ document.getElementById('saveBtn').addEventListener('click', async () => {
       maxBitrate: panelBitrate(),
     }
   }
+
   try {
     await saveConfig(updated)
-    loadCfgToUI(updated)
-    settingsPanel.classList.remove('open')
-    setStatus('✅ Đã lưu — bật lại camera để áp dụng độ phân giải')
-    socket.emit(EV.CONFIG_UPDATED)
   } catch (e) {
     setStatus('❌ Lưu config thất bại: ' + e.message, 'error')
+    return
+  }
+  loadCfgToUI(updated)
+  settingsPanel.classList.remove('open')
+  socket.emit(EV.CONFIG_UPDATED)
+
+  // Áp dụng ngay thay vì bảo người dùng "bật lại camera" — panel không có nút nào
+  // làm việc đó, mà startStream() vốn đã replaceTrack cho mọi viewer nên không ai
+  // bị rớt hình.
+  const p = updated.phone
+  const camChanged = p.width !== prev.width || p.height !== prev.height
+    || p.frameRate !== prev.frameRate || p.facingMode !== prev.facingMode
+  const audioChanged = p.audio !== prev.audio
+
+  try {
+    if (localStream && (camChanged || audioChanged)) {
+      setStatus('Đang áp dụng...')
+      await startStream()
+      // Thêm/bớt audio track làm đổi cấu trúc SDP — replaceTrack không đủ, phải
+      // chào hỏi lại từ đầu với từng viewer
+      if (audioChanged) for (const id of [...peers.keys()]) await createPeerFor(id)
+      refreshStreamStatus()
+    } else if (localStream && p.maxBitrate !== prev.maxBitrate) {
+      // Bitrate đổi được ngay trên connection đang chạy, không cần mở lại camera
+      for (const { pc } of peers.values()) await tuneVideoSender(pc)
+      refreshStreamStatus()
+    } else {
+      setStatus(localStream ? '✅ Đã lưu' : '✅ Đã lưu — nhấn nút để bật camera')
+    }
+  } catch (e) {
+    // Tách khỏi lỗi lưu ở trên: config đã ghi thành công rồi, hỏng là ở khâu mở
+    // lại camera (thường do app khác đang giữ hoặc độ phân giải máy không đáp ứng)
+    setStatus('❌ Đã lưu nhưng không mở lại được camera: ' + e.message, 'error')
   }
 })
 
@@ -765,6 +798,26 @@ socket.on('connect', () => {
   if (!localStream) setStatus('Nhấn nút để bật camera')
 })
 
+// Máy khác đang giữ chỗ phone. Dừng hẳn ở đây thay vì cứ chạy tiếp: nếu để cả hai
+// cùng gửi offer thì viewer sẽ nhấp nháy giữa hai nguồn mà không ai hiểu vì sao.
+let busy = false
+socket.on(EV.PHONE_BUSY, () => {
+  busy = true
+  if (localStream) {
+    localStream.getTracks().forEach(t => t.stop())
+    localStream = null
+    preview.srcObject = null
+  }
+  for (const id of [...peers.keys()]) closePeer(id)
+
+  const btn = document.getElementById('startBtn')
+  btn.disabled = true
+  btn.innerHTML = '<span>⛔</span> Máy khác đang dùng'
+  document.getElementById('startOverlay').style.display = ''
+  document.getElementById('camBar').style.display = 'none'
+  setStatus('Đã có điện thoại khác đang stream — đóng trang bên đó rồi tải lại trang này', 'error')
+})
+
 // Giữ màn hình sáng khi đang stream (chống điện thoại tự sleep → ngắt camera)
 let wakeLock = null
 async function keepAwake() {
@@ -781,6 +834,7 @@ document.addEventListener('visibilitychange', () => {
 })
 
 document.getElementById('startBtn').addEventListener('click', async () => {
+  if (busy) return
   const btn = document.getElementById('startBtn')
   btn.disabled = true
   btn.innerHTML = '<span>⏳</span> Đang mở...'

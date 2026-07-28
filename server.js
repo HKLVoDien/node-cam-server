@@ -77,6 +77,45 @@ function readCookie(cookieHeader, name) {
   return null
 }
 
+// Trả về trang có ô nhập thay vì một dòng chữ: người bị chặn thường đang cầm điện
+// thoại, còn token thì nằm ở terminal trên máy khác — không có ô nhập thì họ chỉ
+// còn cách tự gõ `?t=...` vào thanh địa chỉ, mà đa số không biết là làm được.
+// Form GET submit về đúng URL hiện tại nên vào thẳng trang họ định mở.
+const UNAUTHORIZED_PAGE = `<!DOCTYPE html>
+<html lang="vi"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FaceCam — Cần token</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0a0a0f; color:#fff; min-height:100vh; display:flex;
+    align-items:center; justify-content:center; padding:24px;
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+  form { background:#141418; border:1px solid #222; border-radius:20px;
+    padding:32px 28px; width:100%; max-width:380px; text-align:center; }
+  .icon { font-size:40px; margin-bottom:14px; }
+  h1 { font-size:19px; font-weight:700; margin-bottom:10px; }
+  p { font-size:13px; color:#777; line-height:1.7; margin-bottom:20px; }
+  input { width:100%; background:rgba(255,255,255,0.06);
+    border:1px solid rgba(255,255,255,0.12); color:#fff; padding:13px 14px;
+    border-radius:12px; font-size:15px; font-family:ui-monospace,monospace;
+    text-align:center; letter-spacing:1px; }
+  input:focus { outline:none; border-color:#3b82f6; }
+  button { width:100%; margin-top:12px; padding:14px; background:#3b82f6;
+    color:#fff; border:none; border-radius:12px; font-size:15px;
+    font-weight:600; cursor:pointer; }
+  button:active { opacity:.85; }
+</style></head><body>
+<form method="get">
+  <div class="icon">🔒</div>
+  <h1>Cần token để vào</h1>
+  <p>Token được in ở terminal nơi chạy server.<br>Quét QR từ terminal thì vào thẳng, khỏi nhập.</p>
+  <input name="t" placeholder="32 ký tự" pattern="[a-f0-9]{32}" required autofocus
+         autocomplete="off" autocapitalize="off" spellcheck="false">
+  <button type="submit">Vào</button>
+</form>
+</body></html>`
+
 app.use((req, res, next) => {
   if (isLocalAddress(req.socket.remoteAddress)) return next()
 
@@ -89,7 +128,14 @@ app.use((req, res, next) => {
   if (readCookie(req.headers.cookie, 'fc_token') === TOKEN) return next()
 
   console.warn(`[AUTH] Từ chối ${req.socket.remoteAddress} → ${req.method} ${req.path}`)
-  res.status(401).send('Unauthorized — mở lại bằng link QR trên terminal.')
+
+  // Phân biệt theo đường dẫn chứ không theo header Accept: fetch() mặc định gửi
+  // `*/*`, mà `*/*` khớp cả html — dựa vào Accept sẽ nhét nguyên trang HTML vào
+  // chỗ code đang chờ JSON.
+  if (req.path.startsWith('/api/') || req.path.startsWith('/socket.io/')) {
+    return res.status(401).json({ error: 'unauthorized' })
+  }
+  res.status(401).type('html').send(UNAUTHORIZED_PAGE)
 })
 
 // Chặn HTTP mà không chặn socket thì vô nghĩa: client có thể nối thẳng vào
@@ -285,6 +331,19 @@ function sendTo(socket, peer, targetId, event, data) {
   peer?.to(targetId).emit(event, data)
 }
 
+// Mỗi phòng chỉ phục vụ đúng một phone. Hai phone cùng vào sẽ cùng nhận
+// VIEWER_REQUEST rồi cùng gửi offer tới một viewer — viewer thấy `from` khác nhau
+// nên đóng peer connection cũ và dựng lại liên tục, hình nhấp nháy mà không bên
+// nào biết vì sao. Map nằm ngoài setupSignaling vì phone có thể ở io HTTP còn
+// viewer ở io HTTPS: hai instance tách biệt nhưng dùng chung một phòng.
+const activePhones = new Map()   // room -> socket.id của phone đang giữ chỗ
+
+// Socket.IO cấp id mới cho mỗi lần reconnect, và bản ghi cũ có thể chưa kịp xoá
+// khi phone vào lại. Chỉ từ chối khi socket đang giữ chỗ thật sự còn sống.
+function socketAlive(io, peer, id) {
+  return Boolean(io.sockets.sockets.get(id) || peer?.sockets.sockets.get(id))
+}
+
 function setupSignaling(io, peer, label) {
   io.on('connection', (socket) => {
     console.log(`[${label}] CONNECT   ${socket.id}`)
@@ -295,6 +354,19 @@ function setupSignaling(io, peer, label) {
       const room = typeof payload === 'string' ? payload : payload?.room
       if (!room) return
       const role = (payload && typeof payload === 'object' && payload.role) || 'unknown'
+
+      // Chặn trước khi join: phone bị từ chối không được vào phòng, nếu không nó
+      // vẫn nghe được VIEWER_REQUEST và vẫn kịp gửi offer
+      if (role === ROLE.PHONE) {
+        const holder = activePhones.get(room)
+        if (holder && holder !== socket.id && socketAlive(io, peer, holder)) {
+          console.warn(`[${label}] Từ chối phone thứ hai ${socket.id} — room="${room}" đã có ${holder}`)
+          socket.emit(EV.PHONE_BUSY)
+          return
+        }
+        activePhones.set(room, socket.id)
+      }
+
       socket.data.room = room
       socket.data.role = role
       socket.join(room)
@@ -359,6 +431,9 @@ function setupSignaling(io, peer, label) {
       // Chỉ báo khi đúng phone rớt. Trước đây mọi disconnect đều bắn event này
       // → viewer đóng tab làm các viewer còn lại tưởng mất phone.
       if (role === ROLE.PHONE) {
+        // Nhả chỗ, nhưng chỉ khi đúng socket đang giữ — phone reconnect đã ghi đè
+        // bản ghi bằng id mới, xoá vô điều kiện sẽ mở cửa cho phone lạ chen vào
+        if (activePhones.get(room) === socket.id) activePhones.delete(room)
         io.to(room).emit(EV.PHONE_DISCONNECTED)
         peer?.to(room).emit(EV.PHONE_DISCONNECTED)
       } else if (role === ROLE.VIEWER) {

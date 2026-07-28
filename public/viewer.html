@@ -178,6 +178,7 @@
   <button class="ctrl-btn" id="rot90">↻ 90°</button>
   <button class="ctrl-btn" id="fitBtn" title="Lấp đầy màn hình (cắt rìa) ↔ vừa khung (thấy toàn bộ)">⛶ Lấp đầy</button>
   <button class="ctrl-btn" id="fxBtn" title="Hiệu ứng màu sắc, làm mịn, phóng to">🎨 Hiệu ứng</button>
+  <button class="ctrl-btn" id="audioBtn" style="display:none" title="Nghe tiếng từ mic điện thoại">🔇 Tiếng</button>
   <div class="ctrl-divider"></div>
   <button class="hide-btn" id="hideBtn" title="Ẩn controls (double-click để hiện lại)">✕</button>
 </div>
@@ -383,6 +384,33 @@ document.addEventListener('dblclick', () => {
   pushConfig({ hideControls: false })
 })
 
+// ── Tiếng từ mic điện thoại ─────────────────────────────────────────────────
+// Trình duyệt chặn autoplay video có tiếng, nên không thể tự bỏ câm khi nhận
+// stream — bắt buộc phải do người dùng bấm. Nút chỉ hiện khi phone thật sự gửi
+// audio track, để không bày ra một nút bấm vào không có gì xảy ra.
+const audioBtn = document.getElementById('audioBtn')
+
+function syncAudioBtn() {
+  audioBtn.textContent = video.muted ? '🔇 Tiếng' : '🔊 Tiếng'
+  audioBtn.classList.toggle('active', !video.muted)
+}
+
+function refreshAudioBtn(stream) {
+  const hasAudio = (stream?.getAudioTracks().length ?? 0) > 0
+  audioBtn.style.display = hasAudio ? '' : 'none'
+  // Phone tắt mic giữa chừng → câm lại, nếu không lần bật mic sau sẽ phát tiếng
+  // đột ngột mà nút vẫn hiển thị đúng trạng thái cũ
+  if (!hasAudio) video.muted = true
+  syncAudioBtn()
+}
+
+audioBtn.addEventListener('click', () => {
+  video.muted = !video.muted
+  // videoSoft dùng chung MediaStream với video — bỏ câm cả hai là nghe thành hai
+  // luồng chồng nhau, nên lớp mịn luôn giữ câm
+  syncAudioBtn()
+})
+
 function requestStream() {
   socket.emit(EV.VIEWER_REQUEST)
 }
@@ -528,6 +556,9 @@ socket.on(EV.OFFER, async ({ from, sdp }) => {
       // decode, chỉ là hai element cùng vẽ một nguồn
       video.srcObject = streams[0]
       videoSoft.srcObject = streams[0]
+      // ontrack chạy một lần cho mỗi track — audio có thể tới sau video, nên phải
+      // kiểm tra lại ở cả hai lần chứ không chỉ lần đầu
+      refreshAudioBtn(streams[0])
       // Không thêm emoji 🟢 vào text: .dot đã là chấm xanh do CSS vẽ, thêm nữa
       // là thành hai chấm cạnh nhau
       setStatus('Đang stream', 'live')
@@ -598,6 +629,7 @@ socket.on(EV.PHONE_DISCONNECTED, () => {
   // nên phone quay lại cũng không ai yêu cầu offer mới → phải F5 thủ công
   video.srcObject = null
   videoSoft.srcObject = null
+  refreshAudioBtn(null)
   phoneId = null
   stopStats()
   startRetry()
