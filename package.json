@@ -15,7 +15,7 @@
     "facecam"
   ],
   "author": "DienJVo",
-  "license": "ISC",
+  "license": "MIT",
   "engines": {
     "node": ">=18"
   },
