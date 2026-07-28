@@ -2,16 +2,17 @@
   Mission: Mô tả kiến trúc *hiện tại* của FaceCam Server — module, luồng signaling,
     use-case, rủi ro còn lại. Lịch sử "đã sửa gì, vì sao" nằm ở FINDINGS-2026-07-27.md.
   Author: DienJVo
-  Version: 2.0.0
+  Version: 2.1.0
 -->
 
 # FaceCam Server — Architecture Audit
 
-> **Phiên bản tài liệu:** 2.0 · **Cập nhật:** 2026-07-27
-> **Phạm vi:** `server.js`, `init.js`, `public/` (4 trang + `shared.js`)
-> **Phản ánh code tại thời điểm:** sau đợt rà soát 2026-07-27
+> **Phiên bản tài liệu:** 2.1 · **Cập nhật:** 2026-07-28
+> **Phạm vi:** `server.js`, `certs.js`, `network.js`, `init.js`, `public/` (3 trang + `shared.js` + `i18n.js`), `test/`
+> **Phản ánh code tại thời điểm:** sau đợt dọn dẹp 2026-07-28
 
 **Lịch sử tài liệu**
+- **v2.1 (2026-07-28)** — bỏ `control.html`; tách `certs.js` và `network.js` khỏi `server.js`; cert sinh bằng `node-forge` thay `openssl` và tự ký lại khi đổi IP; thêm i18n (vi/en) và bộ test 72 ca.
 - **v2.0 (2026-07-27)** — viết lại theo code hiện tại: protocol signaling đã đổi sang định tuyến đích danh, thêm lớp xác thực, hỗ trợ nhiều viewer. Xem [FINDINGS-2026-07-27.md](FINDINGS-2026-07-27.md) để biết chi tiết từng thay đổi.
 - **v1.0 (2026-06-22)** — bản gốc. Phần lớn rủi ro nêu trong đó đã được xử lý; các mục Risk/Refactor của bản cũ không còn áp dụng.
 
@@ -46,16 +47,18 @@ FaceCam Server biến điện thoại thành webcam qua WebRTC. Node.js **chỉ 
 | HTTP | Express 5.x |
 | Realtime | Socket.IO 4.x — chạy song song trên cả HTTP và HTTPS |
 | Truyền video | WebRTC P2P (API sẵn của trình duyệt) |
-| TLS | Self-signed cert sinh bởi OpenSSL, có SAN |
+| TLS | Self-signed cert sinh bởi `node-forge`, có SAN, tự ký lại khi đổi IP |
 | Xác thực | Token 32-hex lưu file `.token`; localhost được miễn |
 | QR | gói npm `qrcode` |
 | Frontend | Vanilla JS, không build step |
+| Đa ngôn ngữ | Bảng chuỗi vi/en trong `public/i18n.js`, lựa chọn lưu `localStorage` |
+| Test | `node --test` có sẵn trong Node, không thêm framework |
 | Config | File JSON trên đĩa + cache trong RAM |
 | Database / Queue / Cache | Không có |
 
 **Ràng buộc thiết kế cố ý:**
 - `iceServers: []` — không STUN/TURN. Chỉ ghép được bằng host candidate → **phone và PC phải cùng subnet**. Đổi lại: không phụ thuộc dịch vụ ngoài, không rò rỉ IP.
-- Một phòng duy nhất, hardcode `'facecam'` — phục vụ một phiên stream tại một thời điểm.
+- Một phòng duy nhất, hardcode `'facecam'` — phục vụ một phiên stream tại một thời điểm, và **chỉ một phone**: phone thứ hai bị từ chối bằng `phone_busy`.
 - Không database — config là một file JSON.
 
 ---
@@ -64,34 +67,52 @@ FaceCam Server biến điện thoại thành webcam qua WebRTC. Node.js **chỉ 
 
 ```
 node-cam-server/
-├── server.js              ← backend một file: HTTP, HTTPS, auth, Socket.IO, REST, signaling
-├── init.js                ← CLI setup: npm install, sinh cert có SAN, dò ADB
+├── server.js              ← backend: HTTP, HTTPS, auth, Socket.IO, REST, signaling
+├── certs.js               ← sinh và bảo trì cert TLS (thay openssl)
+├── network.js             ← chọn IP LAN giữa nhiều card mạng
+├── init.js                ← CLI setup: npm install, sinh cert, dò ADB
 ├── package.json
+├── LICENSE                ← MIT
 ├── config.json            ← config runtime (gitignored, server tự tạo khi thiếu)
 ├── .token                 ← token xác thực (gitignored, bền qua restart)
-├── cert.pem / key.pem     ← TLS self-signed (gitignored, sinh bởi init.js)
+├── cert.pem / key.pem     ← TLS self-signed (gitignored, sinh bởi certs.js)
+├── .github/workflows/
+│   └── test.yml           ← CI: Ubuntu + Windows × Node 22/24
 ├── docs/
 │   ├── ARCHITECTURE_AUDIT.md    ← tài liệu này — kiến trúc hiện tại
+│   ├── ROADMAP.md               ← định hướng và các giai đoạn
 │   └── FINDINGS-2026-07-27.md   ← nhật ký rà soát & sửa lỗi
+├── test/
+│   ├── helpers.js         ← dựng server con + client Socket.IO tối giản
+│   ├── signaling.test.js  ← định tuyến đa viewer, chống mạo danh, một phone/phòng
+│   ├── certs.test.js      ← SAN, ký lại khi đổi IP
+│   ├── auth.test.js       ← token, trang 401
+│   ├── i18n.test.js       ← bảng chuỗi không lệch khoá
+│   └── network.test.js    ← thứ tự ưu tiên card mạng
 └── public/
     ├── shared.js          ← hằng số signaling + helper config, dùng chung server ↔ client
+    ├── i18n.js            ← bảng chuỗi giao diện (vi/en)
     ├── index.html         ← dashboard PC: QR USB/WiFi, chọn IP khi nhiều card mạng
-    ├── phone.html         ← sender: getUserMedia → nhiều WebRTC offer
-    ├── viewer.html        ← receiver: answer → <video> → nguồn cho OBS
-    └── control.html       ← bảng điều khiển config, mở được trên điện thoại
+    ├── phone.html         ← sender: getUserMedia → nhiều WebRTC offer, panel cấu hình
+    └── viewer.html        ← receiver: answer → <video> → nguồn cho OBS, panel hiệu ứng
 ```
 
 **Số dòng:**
 
 | File | Dòng | Trong đó JS | Trách nhiệm |
 |---|---|---|---|
-| `server.js` | 414 | 414 | Toàn bộ backend |
-| `init.js` | 151 | 151 | Setup một lần |
-| `public/shared.js` | 53 | 53 | Hằng số + helper dùng chung |
-| `public/phone.html` | 835 | 375 | UI camera + WebRTC sender đa peer |
-| `public/viewer.html` | 354 | 244 | UI receiver + stats |
-| `public/control.html` | 295 | 102 | Bảng config |
-| `public/index.html` | 281 | 34 | Dashboard QR |
+| `server.js` | 542 | 542 | Toàn bộ backend |
+| `public/i18n.js` | 334 | 334 | Bảng chuỗi vi/en + `t()` |
+| `public/shared.js` | 137 | 137 | Hằng số + helper dùng chung |
+| `certs.js` | 127 | 127 | Cert TLS |
+| `init.js` | 119 | 119 | Setup một lần |
+| `network.js` | 44 | 44 | Chọn IP LAN |
+| `public/phone.html` | 1037 | 530 | UI camera + WebRTC sender đa peer + panel cấu hình |
+| `public/viewer.html` | 690 | 480 | UI receiver + stats + panel hiệu ứng |
+| `public/index.html` | 305 | 45 | Dashboard QR |
+| `test/` (6 file) | 921 | 921 | 72 test |
+
+`control.html` (295 dòng) **đã bị bỏ** — xem [ROADMAP §4](ROADMAP.md). Từ khi viewer có panel hiệu ứng và phone có panel cấu hình, nó không còn làm gì mà hai trang kia không làm; ba giao diện cho cùng một `config.json` là gánh nặng phải trả mãi, và chính sự trùng lặp đó đã đẻ ra bug thật.
 
 ### `public/shared.js` — nguồn duy nhất cho protocol
 
@@ -106,7 +127,17 @@ const { ROLE, EV } = require('./public/shared.js')
 const { ROOM, ROLE, EV, RTC_CONFIG, fetchConfig, saveConfig } = FaceCam
 ```
 
-Xuất ra: `ROOM`, `ROLE` (`phone`/`viewer`/`control`), `EV` (9 tên event), `RTC_CONFIG`, `fetchConfig()`, `saveConfig()`.
+Xuất ra: `ROOM`, `ROLE` (`phone`/`viewer`), `EV` (10 tên event), `RTC_CONFIG`, `FILTER_KEYS`, `FILTER_PRESETS`, `RESOLUTIONS`, các helper bitrate, `fetchConfig()`, `saveConfig()`.
+
+### `public/i18n.js` — bảng chuỗi giao diện
+
+Tách khỏi `shared.js` vì `shared.js` còn được server `require`, mà bảng chuỗi thì chỉ trình duyệt cần. Cũng theo UMD, nên server vẫn tra được để render trang 401.
+
+**Ngôn ngữ lưu ở `localStorage`, không vào `config.json`** — config dùng chung cho mọi thiết bị, nhét ngôn ngữ vào đó thì người cầm phone chọn tiếng Việt sẽ đổi luôn ngôn ngữ viewer của người khác.
+
+Khoá preset là định danh ASCII (`warm`, `cool`) chứ không phải tên hiển thị; dùng tên tiếng Việt làm khoá thì đổi ngôn ngữ là mất preset. Có test canh chuyện này.
+
+Chuỗi trong `console.warn`/`console.error` cố ý **giữ nguyên tiếng Việt** — đó là log cho người phát triển, không phải giao diện.
 
 ---
 
@@ -129,24 +160,26 @@ Xuất ra: `ROOM`, `ROLE` (`phone`/`viewer`/`control`), `EV` (9 tên event), `RT
 │  │      Node HTTP :7070  +  HTTPS :7443           │ │
 │  └────────────────────────────────────────────────┘ │
 └──────────────────────────────────────────────────────┘
-       ↕ Socket.IO          ↕ REST        ↕ static
-┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-│  phone.html  │   │ viewer.html  │   │ control.html │
-│  N peer conn │◄─►│  1 peer conn │   │  config UI   │
-└──────────────┘P2P└──────────────┘   └──────────────┘
+       ↕ Socket.IO       ↕ REST       ↕ static
+┌────────────────┐        ┌────────────────┐
+│   phone.html   │        │  viewer.html   │
+│  N peer conn   │◄──────►│  1 peer conn   │
+│  panel cấu hình│  P2P   │ panel hiệu ứng │
+└────────────────┘        └────────────────┘
 ```
 
-**Hướng phụ thuộc:** `server.js` → `express`, `socket.io`, `qrcode`, `crypto`, `fs`, `os`, `./public/shared.js`. Các client → `/socket.io/socket.io.js`, `/shared.js`, WebRTC API. Không có phụ thuộc vòng.
+**Hướng phụ thuộc:** `server.js` → `express`, `socket.io`, `qrcode`, `crypto`, `fs`, `./certs.js`, `./network.js`, `./public/shared.js`, `./public/i18n.js`. `certs.js` → `node-forge` + `crypto`. Các client → `/socket.io/socket.io.js`, `/shared.js`, `/i18n.js`, WebRTC API. Không có phụ thuộc vòng.
 
 ### Vi phạm kiến trúc còn lại
 
 | Vi phạm | Vị trí | Mức độ | Ghi chú |
 |---|---|---|---|
-| Không tách concern trong `server.js` | Toàn file | Thấp | Chấp nhận được ở 414 dòng |
+| Không tách concern trong `server.js` | Toàn file | Thấp | Chấp nhận được ở 542 dòng; phần cert và mạng đã tách ra module riêng để test kiểm được |
 | `setupSignaling` giữ tham chiếu `peer` qua closure | `server.js` | Thấp | Vòng đời = vòng đời tiến trình |
 | I/O config nằm thẳng trong route handler | `server.js` | Thấp | Đã có cache RAM + ghi atomic bất đồng bộ |
 | Tên phòng `'facecam'` hardcode | `shared.js` | Thấp | Nhưng đã về **một** nguồn duy nhất |
 | Ba trang client tự implement UI trạng thái riêng | `public/*.html` | Thấp | Cố ý — mỗi trang một dạng UI khác nhau |
+| Chuỗi hiển thị do JS ghi phải tự vẽ lại khi đổi ngôn ngữ | `viewer.html`, `phone.html` | Thấp | `applyI18n()` chỉ lo phần đánh dấu `data-i18n` trong HTML tĩnh |
 
 ---
 
@@ -163,7 +196,8 @@ graph TD
         API --> CC[configCache RAM]
         CC --> PC[persistConfig<br/>tmp + rename, tuần tự]
         API --> QR[QRCode]
-        API --> NET[listLocalIPs<br/>lọc card ảo]
+        API --> NET[network.js<br/>listLocalIPs · lọc card ảo]
+        CERT[certs.js<br/>ensureCert · ký lại khi đổi IP] --> HTTPS_S[HTTPS server]
         SIG --> IOH[Socket.IO HTTP :7070]
         SIG --> IOS[Socket.IO HTTPS :7443]
         IOH <-->|bridge peer| IOS
@@ -171,14 +205,16 @@ graph TD
 
     subgraph Clients
         IDX[index.html] -->|GET /api/urls| API
-        CTL[control.html] -->|GET/POST /api/config| API
-        CTL -->|socket| IOH
-        PH[phone.html] -->|socket| IOS
+        PH[phone.html] -->|GET/POST /api/config| API
+        PH -->|socket| IOS
         PH -->|getUserMedia| CAM[📷 Camera]
-        VW[viewer.html] -->|socket| IOH
+        VW[viewer.html] -->|GET/POST /api/config| API
+        VW -->|socket| IOH
         SH -.dùng chung.-> PH
         SH -.dùng chung.-> VW
-        SH -.dùng chung.-> CTL
+        I18[i18n.js<br/>bảng chuỗi vi/en] -.-> PH
+        I18 -.-> VW
+        I18 -.-> IDX
         PH <==>|WebRTC P2P<br/>không qua server| VW
     end
 ```
@@ -263,7 +299,7 @@ function guardSocket(io) {
 | `phone.frameRate` | số nguyên 1–120 |
 | `phone.maxBitrate` | số nguyên 100 000–30 000 000 |
 
-Dải của nhóm `filters` khai báo một lần trong `FILTER_RANGES` và phát ra qua `GET /api/filter-ranges`; `control.html` dựng slider từ đó thay vì hardcode min/max, nên UI không thể lệch với validate phía server.
+Dải của nhóm `filters` khai báo một lần trong `FILTER_RANGES` và phát ra qua `GET /api/filter-ranges`; panel hiệu ứng trên viewer dựng slider từ đó thay vì hardcode min/max, nên UI không thể lệch với validate phía server.
 
 Giá trị ngoài dải bị **từ chối** (giữ giá trị hiện tại), **không clamp** — `width: 0` là dữ liệu hỏng chứ không phải "hơi nhỏ", nâng lên 160 vẫn là ghi đè rác lên giá trị tốt. Key lạ bị loại. `__proto__` không có đường vào vì hàm chỉ đọc các field đã liệt kê.
 
@@ -365,7 +401,7 @@ Nhờ vậy ICE restart **tái dùng** connection, không mất hình.
 
 Cả ba trang đều: `POST /api/config` → `emit('config_updated')` → các trang khác `fetchConfig()` rồi cập nhật UI.
 
-`control.html` **có join phòng** với role `control` — bắt buộc, vì server relay `config_updated` theo phòng.
+Cả hai trang **đều join phòng** — bắt buộc, vì server relay `config_updated` theo phòng. Người gửi không nhận lại event của chính mình, nếu không viewer sẽ tự nạp lại config ngay sau khi vừa lưu và ghi đè giá trị đang kéo dở trên slider.
 
 > **Hạn chế đã biết (TOCTOU):** event `config_updated` không mang payload, bên nhận phải fetch riêng. Hai thay đổi liên tiếp có thể khiến response về không đúng thứ tự. Đã cân nhắc nhét config vào payload nhưng chưa làm — xác suất thấp ở quy mô một người dùng.
 
@@ -420,7 +456,7 @@ Cả hai element cùng `srcObject` nên **không tốn thêm băng thông hay de
 
 `applyTransform()` phải áp cho **cả hai lớp**, và vẫn giữ quy tắc hoán đổi `width`/`height` ở 90°/270° (xem 5.6).
 
-**Panel chỉnh nằm ngay trên viewer.** Slider áp filter **local trước rồi mới lưu**, việc ghi đĩa và báo các trang khác được gom lại sau 300ms — nên kéo slider mượt từng frame thay vì giật theo nhịp round-trip. Chỉnh từ `control.html` cũng được nhưng phải chờ một vòng mạng.
+**Panel chỉnh nằm ngay trên viewer.** Slider áp filter **local trước rồi mới lưu**, việc ghi đĩa và báo các trang khác được gom lại sau 300ms — nên kéo slider mượt từng frame thay vì giật theo nhịp round-trip.
 
 Panel đóng theo thanh điều khiển (`hideControls`, nút ✕). Không có ràng buộc này thì nó nằm lại trên khung hình mà không còn nút nào để tắt, và **OBS sẽ thu cả panel vào stream**.
 
@@ -434,15 +470,50 @@ Panel đóng theo thanh điều khiển (`hideControls`, nút ✕). Không có r
 
 ---
 
-### 5.11 `init.js`
+### 5.11 `certs.js` — cert TLS
 
-Bốn bước: kiểm `node_modules` → sinh cert → kiểm `config.json` → dò ADB.
+Cert gắn với địa chỉ IP, mà IP LAN đổi liên tục: DHCP cấp lại sau vài ngày, đổi mạng, cắm dây song song WiFi. Trước đây cert sinh một lần bằng `openssl` rồi thôi, nên đổi mạng là cert trỏ nhầm mà không có gì báo.
 
-**Cert:** tự lấy IP LAN, thêm `-addext "subjectAltName=IP:<ip>,IP:127.0.0.1,DNS:facecam,DNS:localhost"`. Chrome bỏ qua trường CN từ bản 58, chỉ đọc SAN. Có nhánh dự phòng cho OpenSSL < 1.1.1 (tạo cert không SAN nhưng nói rõ hệ quả). Với cert sẵn có thì phân biệt "không có SAN" và "SAN trỏ IP cũ".
+`ensureCert(certPath, keyPath, ips)` chạy ở mỗi lần khởi động server và trong `npm run init`. Nó ký lại khi:
 
-**Config:** **không** tự tạo nữa — `server.js` đã dựng từ `DEFAULT_CONFIG` khi thiếu. Giữ bản default thứ hai ở đây từng khiến hai bên trôi dạt (`init.js` thiếu `maxBitrate`).
+| Điều kiện | Lý do |
+|---|---|
+| Chưa có cert | Lần chạy đầu |
+| Thiếu IP hiện tại trong SAN | Đổi mạng / DHCP cấp lại |
+| Cert không đọc được | File hỏng — sinh lại còn hơn để server chết |
+| Còn dưới 30 ngày là hết hạn | Đợi tới đúng ngày thì trình duyệt chặn hẳn chứ không chỉ cảnh báo |
+
+IP không đổi thì **không** đụng vào cert — ký lại vô cớ bắt người dùng chấp nhận cảnh báo mới trên điện thoại mỗi lần mở server. Có test riêng canh điều này.
+
+SAN chứa **mọi** IP LAN cùng lúc (cộng `127.0.0.1`, `localhost`, `facecam`), vì máy cắm dây song song WiFi có hai địa chỉ và không đoán được phone tới bằng đường nào. Chrome bỏ qua trường CN từ bản 58 nên SAN là thứ duy nhất có tác dụng.
+
+**Vì sao bỏ `openssl`:** Windows không có sẵn, bản cũ không hỗ trợ `-addext` (cert tạo ra thiếu SAN), và bản đóng gói exe sau này càng không thể yêu cầu người dùng tự cài. Đây là điều kiện cần cho việc đóng gói chứ không chỉ là dọn dẹp.
+
+Cặp khoá sinh bằng `crypto.generateKeyPairSync` (native, ~100ms) thay vì RSA thuần JS của `node-forge` — nhanh hơn khoảng một bậc; `node-forge` chỉ lo phần dựng và ký X.509.
+
+**Cố ý không làm mô hình CA riêng.** Đó là cách duy nhất bỏ hẳn màn hình cảnh báo, nhưng đổi lại người dùng phải cài CA vào điện thoại — Android cần 5 bước trong Settings và bắt đặt PIN khoá màn hình, iOS cần cài profile *rồi* bật thêm một công tắc ở chỗ khác hẳn. Xem [ROADMAP §4.1](ROADMAP.md).
+
+### 5.12 `network.js` — chọn IP LAN
+
+Tách khỏi `server.js` vì `require('./server.js')` sẽ khởi động server thật, nên test buộc phải **chép lại** logic — mà bản chép có thể lệch với bản gốc lúc nào không biết, nghĩa là test xanh mà không chứng minh được gì.
+
+`listLocalIPs(interfaces)` nhận tham số để test giả lập được máy nhiều card mạng; mặc định gọi `os.networkInterfaces()`.
+
+### 5.13 `init.js`
+
+Ba bước: kiểm `node_modules` → gọi `ensureCert` → dò ADB.
+
+**Config:** **không** tự tạo — `server.js` đã dựng từ `DEFAULT_CONFIG` khi thiếu. Giữ bản default thứ hai ở đây từng khiến hai bên trôi dạt (`init.js` thiếu `maxBitrate`).
 
 **ADB:** chỉ dò path của đúng OS đang chạy.
+
+### 5.14 Đa ngôn ngữ
+
+Xem [§2 — `public/i18n.js`](#publici18njs--bảng-chuỗi-giao-diện) cho phần thiết kế. Ba điểm về mặt vận hành:
+
+- `applyI18n()` chỉ dịch được phần đánh dấu `data-i18n` trong HTML tĩnh. Chuỗi do JS ghi ra (dòng trạng thái, nhãn nút "lấp đầy/vừa khung", mục "Tuỳ chỉnh…" trong dropdown) phải tự vẽ lại khi nghe event `fc:langchange`.
+- `setStatus()` ở cả hai trang nhận **khoá** chứ không nhận câu chữ, và nhớ lại khoá đang hiển thị — nếu không thì đổi ngôn ngữ giữa chừng sẽ để lại một dòng trạng thái tiếng cũ.
+- Trang 401 do server render nên không đọc được `localStorage`; nó chọn theo `Accept-Language`. Người bị chặn còn chưa vào được trang nào để mà chọn ngôn ngữ.
 
 ---
 
@@ -487,7 +558,7 @@ Bốn bước: kiểm `node_modules` → sinh cert → kiểm `config.json` → 
 ### UC-05 · Cập nhật config
 | | |
 |---|---|
-| **Vào** | Thao tác trên `control.html`, quick bar phone, hoặc nút viewer |
+| **Vào** | Thao tác trên quick bar / panel cấu hình của phone, hoặc nút và panel hiệu ứng của viewer |
 | **Ra** | `config.json` cập nhật; các trang khác đồng bộ qua `config_updated` |
 | **Quy tắc** | Merge sâu cho `phone`; giá trị ngoài dải bị từ chối; `maxBitrate` áp ngay, độ phân giải cần bật lại camera |
 | **Thất bại** | Ghi đĩa lỗi → log, config RAM vẫn đúng |
@@ -710,17 +781,19 @@ Không còn. `setStatus()` ở `viewer.html` trước đây định nghĩa mà k
 
 ## 11. Khuyến nghị còn lại
 
+### Đã làm
+
+**~~R1 · Đưa test vào repo~~** ✅ (2026-07-28) — `test/` với 72 test chạy bằng `node --test`, kèm CI trên Ubuntu/Windows × Node 22/24. Test tự dựng server trên port trống và ghi dữ liệu vào thư mục tạm qua `FACECAM_DATA_DIR`, nên không đụng `config.json`/`.token`/`cert.pem` thật.
+
+**~~R2 · Tạo lại cert có SAN~~** ✅ (2026-07-28) — không còn là việc thủ công: server tự kiểm và ký lại mỗi lần khởi động. Xem §5.11.
+
 ### Ưu tiên 1 — đáng làm tiếp
-
-**R1 · Đưa test vào repo.** 30 test hiện chạy từ scratchpad. Chuyển vào `test/`, thêm `npm test` dùng `node --test` (có sẵn từ Node 18, không cần dependency).
-
-**R2 · Tạo lại cert có SAN.** Xoá `cert.pem` + `key.pem` rồi `npm run init`. Người dùng đã biết và chọn hoãn.
 
 **R3 · Nhét config vào payload `config_updated`.** Bỏ được vòng fetch thứ hai và xử lý luôn RC-02.
 
 ### Ưu tiên 2 — khi cần mở rộng
 
-**R4 · Tách `server.js`** thành `src/auth.js`, `src/config.js`, `src/signaling.js`, `src/network.js`. Chỉ đáng làm nếu còn thêm tính năng.
+**R4 · Tách `server.js`** thành `src/auth.js`, `src/config.js`, `src/signaling.js`. Phần cert và mạng **đã tách** (`certs.js`, `network.js`) vì test cần kiểm được chúng mà không khởi động server. Phần còn lại chỉ đáng làm nếu thêm nhiều tính năng nữa.
 
 **R5 · Nhiều phòng.** Thay `ROOM` cố định bằng id phiên trong URL, cho phép nhiều cặp phone-viewer độc lập.
 

@@ -183,20 +183,34 @@
   .status-item { display: flex; align-items: center; gap: 6px; }
   .dot { width: 7px; height: 7px; border-radius: 50%; background: #22c55e; animation: pulse 2s infinite; }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  #langSelect {
+    position: fixed;
+    top: 16px; right: 16px;
+    background: #1a1a1a;
+    border: 1px solid #2a2a2a;
+    color: #888;
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
 </style>
 </head>
 <body>
 
+<select id="langSelect" aria-label="Language"></select>
+
 <div class="logo">
   <div class="logo-icon">📷</div>
   <div>
-    <h1>FaceCam Server</h1>
-    <div class="sub">Phone → Webcam via WebRTC</div>
+    <h1 data-i18n="app.name">FaceCam Server</h1>
+    <div class="sub" data-i18n="app.tagline">Biến điện thoại thành webcam qua WebRTC</div>
   </div>
 </div>
 
 <div class="status-bar">
-  <div class="status-item"><div class="dot"></div> Server đang chạy</div>
+  <div class="status-item"><div class="dot"></div> <span data-i18n="home.running">Server đang chạy</span></div>
 </div>
 
 <div class="cards">
@@ -204,46 +218,57 @@
     <div class="card-header">
       <div class="card-title">
         <div class="card-icon">🔌</div>
-        USB Mode
+        <span data-i18n="home.usb">Chế độ USB</span>
       </div>
-      <span class="badge">✦ Khuyến nghị · Ổn định</span>
+      <span class="badge" data-i18n="home.usb.badge">✦ Khuyến nghị · Ổn định</span>
     </div>
     <div class="qr-wrap"><img id="usbQR" alt="QR USB"></div>
     <div class="url" id="usbURL">...</div>
-    <div class="hint"><div class="hint-dot"></div> Cắm USB + ADB reverse</div>
+    <div class="hint"><div class="hint-dot"></div> <span data-i18n="home.usb.hint">Cắm USB + ADB reverse</span></div>
   </div>
 
   <div class="card wifi">
     <div class="card-header">
       <div class="card-title">
         <div class="card-icon">📶</div>
-        WiFi Mode
+        <span data-i18n="home.wifi">Chế độ WiFi</span>
       </div>
-      <span class="badge">Cùng mạng WiFi</span>
+      <span class="badge" data-i18n="home.wifi.badge">Cùng mạng WiFi</span>
     </div>
     <div class="qr-wrap"><img id="wifiQR" alt="QR WiFi"></div>
     <div class="url" id="wifiURL">...</div>
     <select id="ipSelect" style="display:none"></select>
-    <div class="hint"><div class="hint-dot"></div> Accept cert khi mở lần đầu</div>
+    <div class="hint"><div class="hint-dot"></div> <span data-i18n="home.wifi.hint">Chấp nhận cảnh báo cert lần đầu</span></div>
   </div>
 </div>
 
 <div class="actions">
   <a class="btn btn-primary" href="/viewer.html" target="_blank">
-    <span>🖥️</span> Mở Viewer (PC)
+    <span>🖥️</span> <span data-i18n="home.openViewer">Mở Viewer (PC)</span>
   </a>
   <a class="btn btn-secondary" href="/phone.html" target="_blank">
-    <span>📱</span> Mở Phone Page
+    <span>📱</span> <span data-i18n="home.openPhone">Mở trang điện thoại</span>
   </a>
 </div>
 
 <p class="note">
-  <span>USB:</span> phone truy cập localhost → camera hoạt động ngay, không cần HTTPS.<br>
-  <span>WiFi:</span> rút USB nhưng cần accept self-signed cert trên phone lần đầu.
+  <span data-i18n="home.note.usb">USB:</span> <span data-i18n="home.note.usbText">phone vào qua localhost nên camera chạy ngay, không cần HTTPS.</span><br>
+  <span data-i18n="home.note.wifi">WiFi:</span> <span data-i18n="home.note.wifiText">không cần dây, đổi lại phải chấp nhận cert tự ký ở lần mở đầu tiên.</span>
 </p>
 
+<script src="/i18n.js"></script>
 <script>
+const { LANGS, t, currentLang, setLang, applyI18n } = FaceCamI18N
 const ipSelect = document.getElementById('ipSelect')
+
+// Bộ chọn ngôn ngữ dựng từ LANGS thay vì viết cứng <option> — thêm tiếng mới ở
+// i18n.js là ba trang tự có, khỏi sửa từng file HTML
+const langSelect = document.getElementById('langSelect')
+for (const [code, name] of Object.entries(LANGS)) {
+  langSelect.add(new Option(name, code, false, code === currentLang()))
+}
+langSelect.addEventListener('change', () => setLang(langSelect.value))
+applyI18n()
 
 function render(data) {
   document.getElementById('usbQR').src = data.usbQR

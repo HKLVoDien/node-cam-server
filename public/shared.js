@@ -35,30 +35,23 @@
 
   const RTC_CONFIG = { iceServers: [] }
 
-  // Nhãn + preset cho panel hiệu ứng trên viewer. Để ở đây thay vì nhúng thẳng
-  // vào viewer.html vì miền giá trị tương ứng do server phát ra — hai nửa của
-  // cùng một định nghĩa thì nên nằm cạnh nhau
-  const FILTER_LABELS = {
-    brightness: 'Độ sáng',
-    contrast: 'Tương phản',
-    saturate: 'Bão hoà màu',
-    hue: 'Tông màu',
-    softness: 'Làm mịn',
-    grayscale: 'Đen trắng',
-    sepia: 'Ngả nâu',
-    zoom: 'Phóng to',
-  }
+  // Thứ tự hiển thị các slider trong panel hiệu ứng. Nhãn nằm ở i18n.js theo khoá
+  // `filter.<tên>` — trước đây nhãn tiếng Việt nhúng cứng ở đây nên không dịch được.
+  const FILTER_KEYS = ['brightness', 'contrast', 'saturate', 'hue', 'softness', 'grayscale', 'sepia', 'zoom']
 
-  // Preset cố ý KHÔNG đụng zoom (trừ "Gốc"): canh khung xong rồi đổi tông màu
-  // thì không muốn khung nhảy lại
+  // Khoá đặt bằng tiếng Anh để làm định danh; tên hiển thị tra ở i18n theo
+  // `preset.<khoá>`. Dùng tên tiếng Việt làm khoá thì đổi ngôn ngữ là mất preset.
+  //
+  // Preset cố ý KHÔNG đụng zoom (trừ 'none'): canh khung xong rồi đổi tông màu
+  // thì không muốn khung nhảy lại.
   const FILTER_PRESETS = {
-    'Gốc':       { brightness: 1, contrast: 1, saturate: 1, hue: 0, grayscale: 0, sepia: 0, softness: 0, zoom: 1 },
-    'Ấm':        { brightness: 1.05, contrast: 1.05, saturate: 1.15, hue: -8, grayscale: 0, sepia: 0.12, softness: 0 },
-    'Lạnh':      { brightness: 1.02, contrast: 1.08, saturate: 0.95, hue: 10, grayscale: 0, sepia: 0, softness: 0 },
-    'Điện ảnh':  { brightness: 0.98, contrast: 1.25, saturate: 0.85, hue: -5, grayscale: 0, sepia: 0.08, softness: 0 },
-    'Phòng tối': { brightness: 1.3, contrast: 0.95, saturate: 1.1, hue: 0, grayscale: 0, sepia: 0, softness: 0.15 },
-    'Mịn da':    { brightness: 1.08, contrast: 0.97, saturate: 1.05, hue: -4, grayscale: 0, sepia: 0, softness: 0.45 },
-    'Đen trắng': { brightness: 1.05, contrast: 1.15, saturate: 0, hue: 0, grayscale: 1, sepia: 0, softness: 0 },
+    none:     { brightness: 1, contrast: 1, saturate: 1, hue: 0, grayscale: 0, sepia: 0, softness: 0, zoom: 1 },
+    warm:     { brightness: 1.05, contrast: 1.05, saturate: 1.15, hue: -8, grayscale: 0, sepia: 0.12, softness: 0 },
+    cool:     { brightness: 1.02, contrast: 1.08, saturate: 0.95, hue: 10, grayscale: 0, sepia: 0, softness: 0 },
+    cinema:   { brightness: 0.98, contrast: 1.25, saturate: 0.85, hue: -5, grayscale: 0, sepia: 0.08, softness: 0 },
+    lowlight: { brightness: 1.3, contrast: 0.95, saturate: 1.1, hue: 0, grayscale: 0, sepia: 0, softness: 0.15 },
+    smooth:   { brightness: 1.08, contrast: 0.97, saturate: 1.05, hue: -4, grayscale: 0, sepia: 0, softness: 0.45 },
+    bw:       { brightness: 1.05, contrast: 1.15, saturate: 0, hue: 0, grayscale: 1, sepia: 0, softness: 0 },
   }
 
   // Độ phân giải dựng sẵn cho dropdown. Chỉ liệt kê chiều ngang vì camera điện
@@ -97,13 +90,17 @@
     return `${Number.isInteger(mbps) ? mbps : mbps.toFixed(1)} Mbps`
   }
 
-  // Trả về câu nhắc nếu bitrate đang thấp hơn mức nên dùng, ngược lại trả null.
-  // Đặt ở đây để phone và control nói cùng một thông điệp.
+  // Trả về các con số cần cho câu cảnh báo bitrate, hoặc null nếu đang đủ.
+  // Cố tình KHÔNG ghép sẵn thành câu: câu chữ nằm ở i18n (khoá `bitrate.low`),
+  // còn phần tính toán thì server cũng dùng được vì không dính ngôn ngữ nào.
   function bitrateWarning(phone) {
     const need = recommendedBitrate(phone.width, phone.height, phone.frameRate)
     if (!need || Number(phone.maxBitrate) >= need) return null
-    return `${phone.width}×${phone.height} @${phone.frameRate}fps nên dùng từ `
-      + `${formatBitrate(need)} — đang đặt ${formatBitrate(Number(phone.maxBitrate))}, hình dễ bị bết.`
+    return {
+      w: phone.width, h: phone.height, fps: phone.frameRate,
+      need: formatBitrate(need),
+      now: formatBitrate(Number(phone.maxBitrate)),
+    }
   }
 
   // hue là độ, zoom là hệ số, còn lại quy về phần trăm cho dễ đọc
@@ -132,7 +129,7 @@
 
   return {
     ROOM, ROLE, EV, RTC_CONFIG,
-    FILTER_LABELS, FILTER_PRESETS, formatFilterValue,
+    FILTER_KEYS, FILTER_PRESETS, formatFilterValue,
     RESOLUTIONS, matchResolution,
     recommendedBitrate, formatBitrate, bitrateWarning,
     fetchConfig, saveConfig,

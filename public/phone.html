@@ -313,10 +313,10 @@
 <div id="startOverlay">
   <div class="app-icon">📷</div>
   <h2>FaceCam</h2>
-  <p>Dùng điện thoại làm webcam</p>
+  <p data-i18n="phone.tagline">Dùng điện thoại làm webcam</p>
   <button id="startBtn">
     <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-    Bật Camera
+    <span data-i18n="phone.start">Bật Camera</span>
   </button>
 </div>
 
@@ -331,19 +331,19 @@
 <div id="quickBar">
   <button class="qbtn" id="qFlipCam">
     <div class="icon">🔄</div>
-    <span>Flip cam</span>
+    <span data-i18n="phone.flipCam">Đổi cam</span>
   </button>
   <button class="qbtn" id="qTorch" style="display:none">
     <div class="icon">🔦</div>
-    <span>Đèn</span>
+    <span data-i18n="phone.torch">Đèn</span>
   </button>
   <button class="qbtn" id="qFlipH">
     <div class="icon">⇔</div>
-    <span>Flip H</span>
+    <span data-i18n="cfg.flipH">Lật ngang</span>
   </button>
   <button class="qbtn" id="qFlipV">
     <div class="icon">⇕</div>
-    <span>Flip V</span>
+    <span data-i18n="cfg.flipV">Lật dọc</span>
   </button>
   <button class="qbtn" id="qRotate">
     <div class="icon">↻</div>
@@ -351,43 +351,48 @@
   </button>
   <button class="qbtn" id="qSettings">
     <div class="icon">⚙️</div>
-    <span>Config</span>
+    <span data-i18n="phone.settings">Cài đặt</span>
   </button>
 </div>
 
 <!-- Settings Panel -->
 <div id="settingsPanel">
   <div class="panel-header">
-    <h2>⚙️ Cài đặt</h2>
+    <h2>⚙️ <span data-i18n="cfg.title">Cài đặt</span></h2>
     <button class="panel-close" id="closeSettings">✕</button>
   </div>
 
   <div class="panel-body">
 
-    <div class="section-label">📱 Camera</div>
+    <div class="cfg-row">
+      <div class="cfg-row-label" data-i18n="lang.label">Ngôn ngữ</div>
+      <select id="langSelect" aria-label="Language"></select>
+    </div>
+
+    <div class="section-label">📱 <span data-i18n="cfg.section.camera">Camera</span></div>
 
     <div class="cfg-row">
       <div>
-        <div class="cfg-row-label">Mặt camera</div>
+        <div class="cfg-row-label" data-i18n="cfg.facing">Mặt camera</div>
       </div>
       <select id="cfg-facingMode">
-        <option value="environment">📷 Sau</option>
-        <option value="user">🤳 Trước</option>
+        <option value="environment" data-i18n="cfg.facing.back">📷 Sau</option>
+        <option value="user" data-i18n="cfg.facing.front">🤳 Trước</option>
       </select>
     </div>
 
     <div class="cfg-row">
       <div>
-        <div class="cfg-row-label">Độ phân giải</div>
-        <div class="cfg-row-sub">cao hơn cần bitrate cao hơn</div>
+        <div class="cfg-row-label" data-i18n="cfg.resolution">Độ phân giải</div>
+        <div class="cfg-row-sub" data-i18n="cfg.resolution.hint">cao hơn thì cần bitrate cao hơn</div>
       </div>
       <select id="cfg-resPreset"></select>
     </div>
 
     <div class="cfg-row" id="cfg-customRes" hidden>
       <div>
-        <div class="cfg-row-label">Kích thước riêng</div>
-        <div class="cfg-row-sub">rộng × cao, 160–4096</div>
+        <div class="cfg-row-label" data-i18n="cfg.customSize">Kích thước riêng</div>
+        <div class="cfg-row-sub" data-i18n="cfg.customSize.hint">rộng × cao, 160–4096</div>
       </div>
       <div class="res-inputs">
         <input id="cfg-width" type="number" min="160" max="4096" value="1280">
@@ -398,7 +403,7 @@
 
     <div class="cfg-row">
       <div>
-        <div class="cfg-row-label">Frame rate</div>
+        <div class="cfg-row-label" data-i18n="cfg.frameRate">Tốc độ khung hình</div>
       </div>
       <select id="cfg-frameRate">
         <option value="15">15 fps</option>
@@ -410,37 +415,37 @@
 
     <div class="cfg-row">
       <div>
-        <div class="cfg-row-label">Mic</div>
-        <div class="cfg-row-sub">gửi kèm tiếng từ điện thoại</div>
+        <div class="cfg-row-label" data-i18n="cfg.mic">Mic</div>
+        <div class="cfg-row-sub" data-i18n="cfg.mic.hint">gửi kèm tiếng từ điện thoại</div>
       </div>
       <select id="cfg-audio">
-        <option value="false">Tắt</option>
-        <option value="true">Bật</option>
+        <option value="false" data-i18n="cfg.off">Tắt</option>
+        <option value="true" data-i18n="cfg.on">Bật</option>
       </select>
     </div>
 
     <div class="cfg-row">
       <div>
-        <div class="cfg-row-label">Bitrate</div>
-        <div class="cfg-row-sub">cao = nét hơn, cần băng thông tốt</div>
+        <div class="cfg-row-label" data-i18n="cfg.bitrate">Bitrate</div>
+        <div class="cfg-row-sub" data-i18n="cfg.bitrate.hint">cao thì nét hơn nhưng cần băng thông tốt</div>
       </div>
       <select id="cfg-maxBitrate">
-        <option value="2000000">2 Mbps (thấp)</option>
-        <option value="4000000" selected>4 Mbps (giữa)</option>
-        <option value="6000000">6 Mbps (cao)</option>
-        <option value="8000000">8 Mbps (rất cao)</option>
+        <option value="2000000" data-i18n="bitrate.tier.2">2 Mbps (thấp)</option>
+        <option value="4000000" selected data-i18n="bitrate.tier.4">4 Mbps (giữa)</option>
+        <option value="6000000" data-i18n="bitrate.tier.6">6 Mbps (cao)</option>
+        <option value="8000000" data-i18n="bitrate.tier.8">8 Mbps (rất cao)</option>
         <option value="12000000">12 Mbps (2K)</option>
         <option value="16000000">16 Mbps</option>
         <option value="20000000">20 Mbps</option>
         <option value="25000000">25 Mbps (4K)</option>
-        <option value="custom">Tuỳ chỉnh…</option>
+        <option value="custom" data-i18n="cfg.custom">Tuỳ chỉnh…</option>
       </select>
     </div>
 
     <div class="cfg-row" id="cfg-customBr" hidden>
       <div>
-        <div class="cfg-row-label">Bitrate riêng</div>
-        <div class="cfg-row-sub">0.5–30 Mbps</div>
+        <div class="cfg-row-label" data-i18n="cfg.customBitrate">Bitrate riêng</div>
+        <div class="cfg-row-sub" data-i18n="cfg.customBitrate.hint">0.5–30 Mbps</div>
       </div>
       <div class="res-inputs">
         <input id="cfg-brCustom" type="number" step="0.5" min="0.5" max="30">
@@ -450,26 +455,26 @@
 
     <div class="warn-hint" id="cfg-brHint" hidden></div>
 
-    <div class="section-label">🖥️ Viewer (PC)</div>
+    <div class="section-label">🖥️ <span data-i18n="cfg.section.viewer">Viewer (PC)</span></div>
 
     <div class="cfg-row">
-      <div class="cfg-row-label">Lật ngang</div>
+      <div class="cfg-row-label" data-i18n="cfg.flipH">Lật ngang</div>
       <select id="cfg-flipH">
-        <option value="false">Tắt</option>
-        <option value="true">Bật</option>
+        <option value="false" data-i18n="cfg.off">Tắt</option>
+        <option value="true" data-i18n="cfg.on">Bật</option>
       </select>
     </div>
 
     <div class="cfg-row">
-      <div class="cfg-row-label">Lật dọc</div>
+      <div class="cfg-row-label" data-i18n="cfg.flipV">Lật dọc</div>
       <select id="cfg-flipV">
-        <option value="false">Tắt</option>
-        <option value="true">Bật</option>
+        <option value="false" data-i18n="cfg.off">Tắt</option>
+        <option value="true" data-i18n="cfg.on">Bật</option>
       </select>
     </div>
 
     <div class="cfg-row">
-      <div class="cfg-row-label">Xoay</div>
+      <div class="cfg-row-label" data-i18n="cfg.rotation">Xoay</div>
       <select id="cfg-rotation">
         <option value="0">0°</option>
         <option value="90">90°</option>
@@ -480,17 +485,17 @@
 
     <div class="cfg-row">
       <div>
-        <div class="cfg-row-label">Ẩn controls</div>
-        <div class="cfg-row-sub">Trên viewer PC</div>
+        <div class="cfg-row-label" data-i18n="cfg.hideControls">Ẩn thanh điều khiển</div>
+        <div class="cfg-row-sub" data-i18n="cfg.hideControls.hint">trên viewer PC</div>
       </div>
       <select id="cfg-hideControls">
-        <option value="false">Hiện</option>
-        <option value="true">Ẩn</option>
+        <option value="false" data-i18n="cfg.show">Hiện</option>
+        <option value="true" data-i18n="cfg.hide">Ẩn</option>
       </select>
     </div>
 
     <button class="save-btn" id="saveBtn">
-      <span>💾</span> Lưu & Áp dụng
+      <span>💾</span> <span data-i18n="cfg.save">Lưu &amp; Áp dụng</span>
     </button>
 
   </div>
@@ -498,8 +503,10 @@
 
 <script src="/socket.io/socket.io.js"></script>
 <script src="/shared.js"></script>
+<script src="/i18n.js"></script>
 <script>
 const { ROOM, ROLE, EV, RTC_CONFIG, RESOLUTIONS, matchResolution, bitrateWarning, fetchConfig, saveConfig } = FaceCam
+const { LANGS, t, currentLang, setLang, applyI18n } = FaceCamI18N
 const socket = io()
 const statusEl = document.getElementById('status')
 const preview = document.getElementById('preview')
@@ -524,9 +531,9 @@ function setStatus(text, state = '') {
 // Trạng thái phản ánh số viewer đang thực sự nhận hình
 function refreshStreamStatus() {
   const live = [...peers.values()].filter(p => p.pc.connectionState === 'connected').length
-  if (live > 0) setStatus(live === 1 ? 'Đang stream' : `Đang stream (${live} viewer)`, 'connected')
-  else if (peers.size > 0) setStatus('Đang kết nối...')
-  else if (localStream) setStatus('Chờ viewer kết nối...')
+  if (live > 0) setStatus(live === 1 ? t('phone.streaming') : t('phone.streamingN', { n: live }), 'connected')
+  else if (peers.size > 0) setStatus(t('phone.connecting'))
+  else if (localStream) setStatus(t('phone.waitViewer'))
 }
 
 // --- độ phân giải: dropdown dựng sẵn + tuỳ chỉnh ---
@@ -534,7 +541,7 @@ const resPreset = document.getElementById('cfg-resPreset')
 const customRes = document.getElementById('cfg-customRes')
 
 RESOLUTIONS.forEach((r, i) => resPreset.add(new Option(r.label, String(i))))
-resPreset.add(new Option('Tuỳ chỉnh…', 'custom'))
+resPreset.add(new Option(t('cfg.custom'), 'custom'))
 
 // Kích thước không khớp preset nào thì rơi vào "Tuỳ chỉnh" và mở sẵn hai ô,
 // không im lặng nắn về preset gần nhất
@@ -589,9 +596,9 @@ brSelect.addEventListener('change', () => {
 
 const brHint = document.getElementById('cfg-brHint')
 function updateBitrateHint() {
-  const msg = bitrateWarning(panelPhoneValues())
-  brHint.hidden = !msg
-  if (msg) brHint.textContent = '⚠ ' + msg
+  const w = bitrateWarning(panelPhoneValues())
+  brHint.hidden = !w
+  if (w) brHint.textContent = '⚠ ' + t('bitrate.low', w)
 }
 
 // Chỉ đổi ô nhập, chưa lưu — panel này lưu bằng nút "Lưu & Áp dụng"
@@ -633,7 +640,7 @@ fetchConfig().then(c => {
   document.getElementById('qFlipH').classList.toggle('active', !!c.flipH)
   document.getElementById('qFlipV').classList.toggle('active', !!c.flipV)
   document.getElementById('rotLabel').textContent = (c.rotation ?? 0) + '°'
-}).catch(e => setStatus('❌ Không tải được config: ' + e.message, 'error'))
+}).catch(e => setStatus('❌ ' + t('phone.configLoadFailed', { msg: e.message }), 'error'))
 
 document.getElementById('closeSettings').addEventListener('click', () => settingsPanel.classList.remove('open'))
 
@@ -659,7 +666,7 @@ document.getElementById('saveBtn').addEventListener('click', async () => {
   try {
     await saveConfig(updated)
   } catch (e) {
-    setStatus('❌ Lưu config thất bại: ' + e.message, 'error')
+    setStatus('❌ ' + t('phone.saveFailed', { msg: e.message }), 'error')
     return
   }
   loadCfgToUI(updated)
@@ -676,7 +683,7 @@ document.getElementById('saveBtn').addEventListener('click', async () => {
 
   try {
     if (localStream && (camChanged || audioChanged)) {
-      setStatus('Đang áp dụng...')
+      setStatus(t('phone.applying'))
       await startStream()
       // Thêm/bớt audio track làm đổi cấu trúc SDP — replaceTrack không đủ, phải
       // chào hỏi lại từ đầu với từng viewer
@@ -687,12 +694,12 @@ document.getElementById('saveBtn').addEventListener('click', async () => {
       for (const { pc } of peers.values()) await tuneVideoSender(pc)
       refreshStreamStatus()
     } else {
-      setStatus(localStream ? '✅ Đã lưu' : '✅ Đã lưu — nhấn nút để bật camera')
+      setStatus('✅ ' + (localStream ? t('phone.saved') : t('phone.savedStart')))
     }
   } catch (e) {
     // Tách khỏi lỗi lưu ở trên: config đã ghi thành công rồi, hỏng là ở khâu mở
     // lại camera (thường do app khác đang giữ hoặc độ phân giải máy không đáp ứng)
-    setStatus('❌ Đã lưu nhưng không mở lại được camera: ' + e.message, 'error')
+    setStatus('❌ ' + t('phone.reopenFailed', { msg: e.message }), 'error')
   }
 })
 
@@ -795,7 +802,7 @@ async function createPeerFor(viewerId) {
 socket.on('connect', () => {
   socket.emit(EV.JOIN, { room: ROOM, role: ROLE.PHONE })
   // Đang stream mà socket reconnect thì đừng ghi đè trạng thái "Đang stream"
-  if (!localStream) setStatus('Nhấn nút để bật camera')
+  if (!localStream) setStatus(t('phone.pressToStart'))
 })
 
 // Máy khác đang giữ chỗ phone. Dừng hẳn ở đây thay vì cứ chạy tiếp: nếu để cả hai
@@ -812,10 +819,10 @@ socket.on(EV.PHONE_BUSY, () => {
 
   const btn = document.getElementById('startBtn')
   btn.disabled = true
-  btn.innerHTML = '<span>⛔</span> Máy khác đang dùng'
+  btn.innerHTML = '<span>⛔</span> ' + t('phone.busyBtn')
   document.getElementById('startOverlay').style.display = ''
   document.getElementById('camBar').style.display = 'none'
-  setStatus('Đã có điện thoại khác đang stream — đóng trang bên đó rồi tải lại trang này', 'error')
+  setStatus(t('phone.busy'), 'error')
 })
 
 // Giữ màn hình sáng khi đang stream (chống điện thoại tự sleep → ngắt camera)
@@ -837,7 +844,7 @@ document.getElementById('startBtn').addEventListener('click', async () => {
   if (busy) return
   const btn = document.getElementById('startBtn')
   btn.disabled = true
-  btn.innerHTML = '<span>⏳</span> Đang mở...'
+  btn.innerHTML = '<span>⏳</span> ' + t('phone.starting')
   try {
     // startStream() phải chạy trước: getCameras() nằm trong đó và chỉ đọc được
     // tên camera sau khi quyền đã được cấp
@@ -845,12 +852,12 @@ document.getElementById('startBtn').addEventListener('click', async () => {
     await keepAwake()
     document.getElementById('startOverlay').style.display = 'none'
     document.getElementById('camBar').style.display = 'flex'
-    setStatus('Chờ viewer kết nối...')
+    setStatus(t('phone.waitViewer'))
     // Viewer nào đã mở sẵn và đang chờ sẽ hỏi lại ngay khi nghe event này
     socket.emit(EV.PHONE_READY)
   } catch (e) {
     btn.disabled = false
-    btn.innerHTML = '<svg viewBox="0 0 24 24" style="width:20px;height:20px;fill:#fff"><path d="M8 5v14l11-7z"/></svg> Bật Camera'
+    btn.innerHTML = '<svg viewBox="0 0 24 24" style="width:20px;height:20px;fill:#fff"><path d="M8 5v14l11-7z"/></svg> ' + t('phone.start')
     setStatus('❌ ' + e.message, 'error')
   }
 })
@@ -874,7 +881,7 @@ socket.on(EV.ANSWER, async ({ from, sdp }) => {
     await flushIce(entry)
   } catch (e) {
     console.error('setRemoteDescription thất bại:', e)
-    setStatus('❌ Bắt tay lỗi — thử bật lại camera', 'error')
+    setStatus('❌ ' + t('phone.handshakeFailed'), 'error')
   }
 })
 
@@ -979,7 +986,7 @@ torchBtn.addEventListener('click', async () => {
     // Một số máy khai báo có torch nhưng từ chối khi camera trước đang bật
     torchOn = !torchOn
     console.warn('Bật/tắt đèn thất bại:', e.message)
-    setStatus('❌ Không bật được đèn trên camera này', 'error')
+    setStatus('❌ ' + t('phone.torchFailed'), 'error')
   }
 })
 
@@ -1008,6 +1015,23 @@ document.getElementById('qRotate').addEventListener('click', function() {
 })
 
 document.getElementById('qSettings').addEventListener('click', () => settingsPanel.classList.add('open'))
+
+// ── Ngôn ngữ ────────────────────────────────────────────────────────────────
+const langSelect = document.getElementById('langSelect')
+for (const [code, name] of Object.entries(LANGS)) {
+  langSelect.add(new Option(name, code, false, code === currentLang()))
+}
+langSelect.addEventListener('change', () => setLang(langSelect.value))
+
+// Đổi ngôn ngữ giữa chừng: các phần do JS ghi ra phải tự vẽ lại, applyI18n chỉ
+// lo được phần đánh dấu sẵn trong HTML
+addEventListener('fc:langchange', () => {
+  resPreset.options[resPreset.options.length - 1].text = t('cfg.custom')
+  updateBitrateHint()
+  refreshStreamStatus()
+})
+
+applyI18n()
 </script>
 </body>
 </html>

@@ -7,8 +7,7 @@
 
 # Lộ trình phát triển
 
-> Bản tiếng Anh (`ROADMAP.en.md`) sẽ được tạo trong đợt dịch docs ở Giai đoạn 0 —
-> dịch cả loạt một lần rẻ hơn dịch lắt nhắt từng file.
+> Bản tiếng Anh: [ROADMAP.en.md](ROADMAP.en.md)
 
 Cập nhật: 2026-07-28
 
@@ -72,19 +71,21 @@ camera **không cần HTTPS**. WiFi mode giữ nguyên, ghi rõ là dành cho ng
 
 Không phụ thuộc quyết định nào ở trên; làm ngay cũng không phí.
 
+Trạng thái: **xong** (2026-07-28), trừ ảnh demo và smoke test trên máy thật.
+
 | Việc | Ghi chú |
 |---|---|
-| Bỏ `control.html` + nút 🎛️ ở viewer | Trùng lặp với panel hiệu ứng (viewer) và panel config (phone). Ba UI cho một config đã đẻ ra bug thật |
-| **Bug: mic câm** | `phone.html` gửi audio track nhưng `viewer.html` để `<video muted>` cứng → bật mic tốn băng thông mà không ai nghe. Cần nút bật tiếng (autoplay policy chặn tự phát có tiếng); chỉ unmute lớp `video`, giữ `videoSoft` muted kẻo nghe đúp |
-| **Bug: hai phone tranh nhau** | Server relay `VIEWER_REQUEST` cả phòng → hai phone cùng offer tới một viewer → viewer đóng/dựng lại pc liên tục, không báo lỗi. Cần từ chối phone thứ hai kèm lý do |
-| **Bug: thông báo không có công cụ đi kèm** | "Đã lưu — bật lại camera để áp dụng" nhưng panel không có nút đó. `startStream()` đã tự `replaceTrack` cho mọi viewer → gọi thẳng là áp dụng được ngay, xoá luôn câu thông báo |
-| Trang 401 có ô nhập token | Hiện là ngõ cụt: chữ đen nền trắng, token nằm ở terminal máy khác |
-| `LICENSE` | `package.json` khai ISC nhưng không có file. Repo không LICENSE = *all rights reserved*, không ai dùng hợp pháp được. **Việc quan trọng nhất, tốn 2 phút** |
-| Test vào `test/` + `npm test` | 30 test đang nằm trong thư mục temp, sẽ mất khi dọn máy |
-| CI chạy `node --test` | Badge xanh để người lạ dám tin |
+| ~~Bỏ `control.html` + nút 🎛️ ở viewer~~ ✅ | Trùng lặp với panel hiệu ứng (viewer) và panel config (phone). Ba UI cho một config đã đẻ ra bug thật |
+| ~~**Bug: mic câm**~~ ✅ | `phone.html` gửi audio track nhưng `viewer.html` để `<video muted>` cứng → bật mic tốn băng thông mà không ai nghe. Cần nút bật tiếng (autoplay policy chặn tự phát có tiếng); chỉ unmute lớp `video`, giữ `videoSoft` muted kẻo nghe đúp |
+| ~~**Bug: hai phone tranh nhau**~~ ✅ | Server relay `VIEWER_REQUEST` cả phòng → hai phone cùng offer tới một viewer → viewer đóng/dựng lại pc liên tục, không báo lỗi. Cần từ chối phone thứ hai kèm lý do |
+| ~~**Bug: thông báo không có công cụ đi kèm**~~ ✅ | "Đã lưu — bật lại camera để áp dụng" nhưng panel không có nút đó. `startStream()` đã tự `replaceTrack` cho mọi viewer → gọi thẳng là áp dụng được ngay, xoá luôn câu thông báo |
+| ~~Trang 401 có ô nhập token~~ ✅ | Hiện là ngõ cụt: chữ đen nền trắng, token nằm ở terminal máy khác |
+| ~~`LICENSE`~~ ✅ (MIT) | `package.json` khai ISC nhưng không có file. Repo không LICENSE = *all rights reserved*, không ai dùng hợp pháp được. **Việc quan trọng nhất, tốn 2 phút** |
+| ~~Test vào `test/` + `npm test`~~ ✅ (72 test) | 30 test đang nằm trong thư mục temp, sẽ mất khi dọn máy |
+| ~~CI chạy `node --test`~~ ✅ (Ubuntu/Windows × Node 22/24) | Badge xanh để người lạ dám tin |
 | ~~`npm run init` chạy sạch trên máy lạ~~ ✅ | Xong — xem mục 4.1 |
-| **i18n UI + docs song ngữ** | Xem mục 5 |
-| Ảnh/GIF demo đầu README | Không có thì không ai đọc tới dòng thứ hai |
+| ~~**i18n UI**~~ ✅ · docs song ngữ | Xem mục 5 |
+| Ảnh/GIF demo đầu README ⬜ | Không có thì không ai đọc tới dòng thứ hai |
 
 Xong G0 là repo public được và người rành máy dùng được.
 
@@ -137,7 +138,6 @@ Kết quả mong muốn: tải 1 file → chạy → cắm dây → quét QR →
 Chỉ làm nếu G1 có người dùng thật.
 
 - Tray icon, chạy nền, khởi động cùng máy.
-- Tự phát hiện đổi IP và ký lại cert.
 - iOS qua USB (`libimobiledevice`) — khó hơn Android nhiều, không có `adb`.
 
 ### Giai đoạn 3 — Chỉ khi chứng minh được nhu cầu
@@ -171,10 +171,18 @@ Cách làm:
 
 ### Docs
 
-Mỗi tài liệu có hai bản: `TÊN.md` (tiếng Anh) và `TÊN.vi.md` (tiếng Việt).
+| Tài liệu | Tiếng Anh | Tiếng Việt |
+|---|---|---|
+| README | `README.md` | `README.vi.md` |
+| Lộ trình | `ROADMAP.en.md` | `ROADMAP.md` |
+| Rà soát kiến trúc | — | `ARCHITECTURE_AUDIT.md` |
+| Nhật ký sửa lỗi | — | `FINDINGS-2026-07-27.md` |
 
-`README.md` để **tiếng Anh** vì là cửa vào của repo public; `README.vi.md` cho
-người Việt. Docs kỹ thuật trong `docs/` cũng theo quy ước đó.
+`README.md` để **tiếng Anh** vì là cửa vào của repo public.
+
+Bản rà soát kiến trúc và nhật ký sửa lỗi **chỉ có tiếng Việt**. Nhật ký sửa lỗi
+vốn là loại tài liệu chỉ ghi thêm chứ không sửa lại, nên bản dịch sẽ lệch dần mà
+không ai buồn đồng bộ. Bản rà soát có thể dịch sau nếu thật sự có người cần.
 
 Dịch **cả loạt một lần** ở cuối G0, sau khi code đã chốt — dịch trước rồi sửa
 code sẽ phải dịch lại.

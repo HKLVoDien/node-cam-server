@@ -11,6 +11,8 @@ const QRCode = require('qrcode')
 const { ROLE, EV } = require('./public/shared.js')
 const { ensureCert } = require('./certs.js')
 const { listLocalIPs, getLocalIP } = require('./network.js')
+// Bảng chuỗi dùng chung với client — trang 401 render ở server nên phải tra tay
+const { STRINGS: I18N_STRINGS } = require('./public/i18n.js')
 
 const app = express()
 
@@ -56,14 +58,23 @@ function readCookie(cookieHeader, name) {
   return null
 }
 
+// Trang này do server render nên không đọc được lựa chọn ngôn ngữ trong
+// localStorage của trình duyệt — dùng Accept-Language, thứ duy nhất có ở đây.
+// Người dùng chưa vào được trang nào thì cũng chưa kịp chọn ngôn ngữ.
+function pickLang(header) {
+  return /\bvi\b/i.test(header ?? '') ? 'vi' : 'en'
+}
+
 // Trả về trang có ô nhập thay vì một dòng chữ: người bị chặn thường đang cầm điện
 // thoại, còn token thì nằm ở terminal trên máy khác — không có ô nhập thì họ chỉ
 // còn cách tự gõ `?t=...` vào thanh địa chỉ, mà đa số không biết là làm được.
 // Form GET submit về đúng URL hiện tại nên vào thẳng trang họ định mở.
-const UNAUTHORIZED_PAGE = `<!DOCTYPE html>
-<html lang="vi"><head><meta charset="UTF-8">
+function unauthorizedPage(lang) {
+  const s = (key) => I18N_STRINGS[lang]?.[key] ?? I18N_STRINGS.en[key] ?? key
+  return `<!DOCTYPE html>
+<html lang="${lang}"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>FaceCam — Cần token</title>
+<title>${s('401.title')}</title>
 <style>
   :root { color-scheme: dark; }
   * { margin:0; padding:0; box-sizing:border-box; }
@@ -87,13 +98,14 @@ const UNAUTHORIZED_PAGE = `<!DOCTYPE html>
 </style></head><body>
 <form method="get">
   <div class="icon">🔒</div>
-  <h1>Cần token để vào</h1>
-  <p>Token được in ở terminal nơi chạy server.<br>Quét QR từ terminal thì vào thẳng, khỏi nhập.</p>
-  <input name="t" placeholder="32 ký tự" pattern="[a-f0-9]{32}" required autofocus
+  <h1>${s('401.heading')}</h1>
+  <p>${s('401.desc')}<br>${s('401.desc2')}</p>
+  <input name="t" placeholder="${s('401.placeholder')}" pattern="[a-f0-9]{32}" required autofocus
          autocomplete="off" autocapitalize="off" spellcheck="false">
-  <button type="submit">Vào</button>
+  <button type="submit">${s('401.submit')}</button>
 </form>
 </body></html>`
+}
 
 app.use((req, res, next) => {
   if (isLocalAddress(req.socket.remoteAddress)) return next()
@@ -114,7 +126,7 @@ app.use((req, res, next) => {
   if (req.path.startsWith('/api/') || req.path.startsWith('/socket.io/')) {
     return res.status(401).json({ error: 'unauthorized' })
   }
-  res.status(401).type('html').send(UNAUTHORIZED_PAGE)
+  res.status(401).type('html').send(unauthorizedPage(pickLang(req.headers['accept-language'])))
 })
 
 // Chặn HTTP mà không chặn socket thì vô nghĩa: client có thể nối thẳng vào

@@ -163,6 +163,16 @@
     transition: background 0.15s, color 0.15s;
   }
   .hide-btn:hover { background: rgba(255,255,255,0.08); color: #ccc; }
+
+  #langSelect {
+    background: rgba(255,255,255,0.08);
+    border: none;
+    color: #ccc;
+    font-size: 12px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
 </style>
 </head>
 <body>
@@ -170,23 +180,26 @@
 <video id="videoSoft" autoplay playsinline muted></video>
 
 <div id="controls">
-  <div id="status"><div class="dot"></div> Chờ phone...</div>
+  <div id="status"><div class="dot"></div> <span data-i18n="viewer.waiting">Chờ phone...</span></div>
   <div id="stats"></div>
   <div class="ctrl-divider"></div>
-  <button class="ctrl-btn" id="flipH">⇔ Flip H</button>
-  <button class="ctrl-btn" id="flipV">⇕ Flip V</button>
-  <button class="ctrl-btn" id="rot90">↻ 90°</button>
-  <button class="ctrl-btn" id="fitBtn" title="Lấp đầy màn hình (cắt rìa) ↔ vừa khung (thấy toàn bộ)">⛶ Lấp đầy</button>
-  <button class="ctrl-btn" id="fxBtn" title="Hiệu ứng màu sắc, làm mịn, phóng to">🎨 Hiệu ứng</button>
-  <button class="ctrl-btn" id="audioBtn" style="display:none" title="Nghe tiếng từ mic điện thoại">🔇 Tiếng</button>
+  <button class="ctrl-btn" id="flipH">⇔ <span data-i18n="viewer.flipH">Lật ngang</span></button>
+  <button class="ctrl-btn" id="flipV">⇕ <span data-i18n="viewer.flipV">Lật dọc</span></button>
+  <button class="ctrl-btn" id="rot90" data-i18n-title="viewer.rotate">↻ 90°</button>
+  <button class="ctrl-btn" id="fitBtn" data-i18n-title="viewer.fitTitle">⛶ <span id="fitLabel">Lấp đầy</span></button>
+  <button class="ctrl-btn" id="fxBtn" data-i18n-title="viewer.effectsTitle">🎨 <span data-i18n="viewer.effects">Hiệu ứng</span></button>
+  <button class="ctrl-btn" id="audioBtn" style="display:none" data-i18n-title="viewer.soundTitle">
+    <span id="audioIcon">🔇</span> <span data-i18n="viewer.sound">Tiếng</span>
+  </button>
   <div class="ctrl-divider"></div>
-  <button class="hide-btn" id="hideBtn" title="Ẩn controls (double-click để hiện lại)">✕</button>
+  <select id="langSelect" aria-label="Language"></select>
+  <button class="hide-btn" id="hideBtn" data-i18n-title="viewer.hide">✕</button>
 </div>
 
 <div id="fxPanel">
   <div class="fx-head">
-    <span>🎨 Hiệu ứng</span>
-    <button id="fxClose" title="Đóng">✕</button>
+    <span>🎨 <span data-i18n="viewer.effects">Hiệu ứng</span></span>
+    <button id="fxClose" data-i18n-title="viewer.close">✕</button>
   </div>
   <div class="fx-presets" id="fxPresets"></div>
   <div id="fxSliders"></div>
@@ -194,8 +207,10 @@
 
 <script src="/socket.io/socket.io.js"></script>
 <script src="/shared.js"></script>
+<script src="/i18n.js"></script>
 <script>
-const { ROOM, ROLE, EV, RTC_CONFIG, FILTER_LABELS, FILTER_PRESETS, formatFilterValue, fetchConfig, saveConfig } = FaceCam
+const { ROOM, ROLE, EV, RTC_CONFIG, FILTER_KEYS, FILTER_PRESETS, formatFilterValue, fetchConfig, saveConfig } = FaceCam
+const { LANGS, t, currentLang, setLang, applyI18n } = FaceCamI18N
 const socket = io()
 const video = document.getElementById('video')
 const videoSoft = document.getElementById('videoSoft')
@@ -220,7 +235,9 @@ const fitBtn = document.getElementById('fitBtn')
 // toàn bộ khung camera, đổi lại có viền đen.
 function applyFit() {
   for (const el of LAYERS) el.style.objectFit = fit
-  fitBtn.textContent = fit === 'cover' ? '⛶ Lấp đầy' : '⬒ Vừa khung'
+  // Chỉ đổi phần chữ trong <span>, giữ nguyên icon — gán textContent cả nút sẽ
+  // xoá mất icon và cả thẻ span mà applyI18n() cần để dịch lại
+  document.getElementById('fitLabel').textContent = fit === 'cover' ? t('viewer.fill') : t('viewer.fit')
   fitBtn.classList.toggle('active', fit === 'contain')
 }
 
@@ -265,9 +282,15 @@ function loadFilters(cfg) {
   refreshFxUI()      // config đổi từ phone → slider trong panel bám theo
 }
 
-function setStatus(text, state = '') {
+// Nhớ lại khoá đang hiển thị để vẽ lại được khi đổi ngôn ngữ giữa chừng
+let statusKey = 'viewer.waiting'
+let statusState = ''
+
+function setStatus(key, state = '') {
+  statusKey = key
+  statusState = state
   statusEl.innerHTML = '<div class="dot"></div>'
-  statusEl.append(text)
+  statusEl.append(t(key))
   statusEl.className = state
 }
 
@@ -311,14 +334,23 @@ fitBtn.addEventListener('click', () => {
 const fxPanel = document.getElementById('fxPanel')
 const fxSliders = document.getElementById('fxSliders')
 
+// Giữ lại dải giá trị server gửi về để dựng lại panel khi đổi ngôn ngữ
+let fxRanges = null
+
 function buildFxPanel(ranges) {
+  fxRanges = ranges
   fxSliders.innerHTML = ''
-  for (const [key, [min, max]] of Object.entries(ranges)) {
+  // Duyệt theo FILTER_KEYS chứ không theo thứ tự key của object: thứ tự slider
+  // là quyết định về giao diện, không nên phụ thuộc thứ tự server trả về
+  for (const key of FILTER_KEYS) {
+    const range = ranges[key]
+    if (!range) continue
+    const [min, max] = range
     const row = document.createElement('div')
     row.className = 'fx-row'
     row.innerHTML = `
       <div class="fx-row-top">
-        <label for="fx-${key}">${FILTER_LABELS[key] ?? key}</label>
+        <label for="fx-${key}" data-i18n="filter.${key}"></label>
         <span class="val" id="fxval-${key}"></span>
       </div>
       <input type="range" id="fx-${key}" data-filter="${key}"
@@ -337,21 +369,23 @@ function buildFxPanel(ranges) {
 
   const fxPresets = document.getElementById('fxPresets')
   fxPresets.innerHTML = ''
-  for (const name of Object.keys(FILTER_PRESETS)) {
+  for (const id of Object.keys(FILTER_PRESETS)) {
     const btn = document.createElement('button')
-    btn.textContent = name
+    // Khoá preset là định danh tiếng Anh, tên hiển thị tra qua i18n
+    btn.dataset.i18n = `preset.${id}`
     btn.addEventListener('click', () => {
-      filters = { ...filters, ...FILTER_PRESETS[name] }
+      filters = { ...filters, ...FILTER_PRESETS[id] }
       applyFilter(); applyTransform(); refreshFxUI()
       pushConfig({ filters })
     })
     fxPresets.appendChild(btn)
   }
+  applyI18n(fxPanel)
   refreshFxUI()
 }
 
 function refreshFxUI() {
-  for (const key of Object.keys(FILTER_LABELS)) {
+  for (const key of FILTER_KEYS) {
     const input = document.getElementById(`fx-${key}`)
     const val = document.getElementById(`fxval-${key}`)
     if (input && filters[key] !== undefined) input.value = filters[key]
@@ -369,6 +403,22 @@ function queueFilterSave() {
 
 document.getElementById('fxBtn').addEventListener('click', () => fxPanel.classList.toggle('open'))
 document.getElementById('fxClose').addEventListener('click', () => fxPanel.classList.remove('open'))
+
+// ── Ngôn ngữ ────────────────────────────────────────────────────────────────
+const langSelect = document.getElementById('langSelect')
+for (const [code, name] of Object.entries(LANGS)) {
+  langSelect.add(new Option(name, code, false, code === currentLang()))
+}
+langSelect.addEventListener('change', () => setLang(langSelect.value))
+
+// applyI18n chỉ dịch được phần đánh dấu data-i18n trong HTML tĩnh; dòng trạng
+// thái và nhãn nút "lấp đầy/vừa khung" do JS ghi nên phải tự vẽ lại
+addEventListener('fc:langchange', () => {
+  setStatus(statusKey, statusState)
+  applyFit()
+})
+
+applyI18n()
 
 fetch('/api/filter-ranges').then(r => r.json()).then(buildFxPanel)
   .catch(e => console.warn('Không tải được dải filter:', e.message))
@@ -473,7 +523,7 @@ function watchPlayback() {
   playbackWatch = setTimeout(() => {
     if (!pc || pc.connectionState !== 'connected') return
     if (video.readyState === 0) {
-      setStatus('Có luồng nhưng không phát được — thử bấm vào màn hình', 'error')
+      setStatus('viewer.playbackStuck', 'error')
       console.warn('ontrack đã chạy nhưng video.readyState vẫn 0 sau 5s.',
         'Thường do autoplay policy hoặc track không có dữ liệu.')
     }
@@ -483,10 +533,11 @@ function watchPlayback() {
 // Nói rõ ICE hỏng ở đâu. `failed` gần như luôn nghĩa là hai máy không có đường
 // đi trực tiếp: khác subnet, AP isolation, hoặc mở viewer trên chính điện thoại
 // đang gửi (gói phải vòng qua router rồi quay lại — nhiều router làm hỏng).
+// Trả về khoá i18n, không phải câu chữ — setStatus lo phần dịch.
 function describeIceFailure(state) {
-  if (state === 'failed') return 'Không ghép được đường truyền (ICE failed) — hai máy có cùng mạng WiFi không?'
-  if (state === 'disconnected') return 'Đường truyền gián đoạn — đang chờ nối lại'
-  return 'Mất kết nối'
+  if (state === 'failed') return 'viewer.iceFailed'
+  if (state === 'disconnected') return 'viewer.iceDisconnected'
+  return 'viewer.disconnected'
 }
 
 async function keepAlive() {
@@ -561,7 +612,7 @@ socket.on(EV.OFFER, async ({ from, sdp }) => {
       refreshAudioBtn(streams[0])
       // Không thêm emoji 🟢 vào text: .dot đã là chấm xanh do CSS vẽ, thêm nữa
       // là thành hai chấm cạnh nhau
-      setStatus('Đang stream', 'live')
+      setStatus('viewer.streaming', 'live')
       startStats()
       watchPlayback()
     }
@@ -597,7 +648,7 @@ socket.on(EV.OFFER, async ({ from, sdp }) => {
   } catch (e) {
     // Offer hỏng/lệch pha → báo rõ và quay lại vòng retry thay vì treo im lặng
     console.error('Xử lý offer thất bại:', e)
-    setStatus('Lỗi bắt tay — đang thử lại', 'error')
+    setStatus('viewer.handshakeError', 'error')
     startRetry()
   }
 })
@@ -623,7 +674,7 @@ socket.on(EV.CONFIG_UPDATED, () => {
 })
 
 socket.on(EV.PHONE_DISCONNECTED, () => {
-  setStatus('Phone mất kết nối — đang chờ', 'error')
+  setStatus('viewer.phoneLost', 'error')
   controls.style.display = ''
   // Bật lại vòng hỏi stream: trước đây retry đã tự tắt sau lần stream đầu tiên
   // nên phone quay lại cũng không ai yêu cầu offer mới → phải F5 thủ công
