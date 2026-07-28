@@ -251,11 +251,19 @@ function guardSocket(io) {
 |---|---|
 | `flipH` / `flipV` / `hideControls` | boolean |
 | `rotation` | 0 / 90 / 180 / 270 |
+| `fit` | `cover` / `contain` |
+| `filters.brightness` / `filters.contrast` | số thực 0.5–1.5 |
+| `filters.saturate` | số thực 0–2 |
+| `filters.hue` | số thực −30…30 |
+| `filters.grayscale` / `filters.sepia` / `filters.softness` | số thực 0–1 |
+| `filters.zoom` | số thực 1–3 |
 | `phone.facingMode` | `environment` / `user` |
 | `phone.audio` | boolean |
 | `phone.width` / `phone.height` | số nguyên 160–4096 |
 | `phone.frameRate` | số nguyên 1–120 |
-| `phone.maxBitrate` | số nguyên 100 000–20 000 000 |
+| `phone.maxBitrate` | số nguyên 100 000–30 000 000 |
+
+Dải của nhóm `filters` khai báo một lần trong `FILTER_RANGES` và phát ra qua `GET /api/filter-ranges`; `control.html` dựng slider từ đó thay vì hardcode min/max, nên UI không thể lệch với validate phía server.
 
 Giá trị ngoài dải bị **từ chối** (giữ giá trị hiện tại), **không clamp** — `width: 0` là dữ liệu hỏng chứ không phải "hơi nhỏ", nâng lên 160 vẫn là ghi đè rác lên giá trị tốt. Key lạ bị loại. `__proto__` không có đường vào vì hàm chỉ đọc các field đã liệt kê.
 
@@ -392,7 +400,41 @@ Cần thiết vì card ảo (WSL, Docker, VirtualBox, VPN) cũng là IPv4 non-in
 
 ---
 
-### 5.10 `init.js`
+### 5.10 Bộ lọc hình ảnh (Tầng A — CSS)
+
+Hiệu ứng áp ở **viewer**, không ở phone. Lý do: PC khoẻ hơn nên phone chỉ lo encode (không nóng thêm, không tụt fps, không thêm latency), và OBS Browser Source render cả trang nên thấy kết quả mà không cần thêm bước nào.
+
+**Hai lớp `<video>` chồng nhau, dùng chung một `MediaStream`:**
+
+```js
+video.style.filter     = css                    // bản sắc nét
+videoSoft.style.filter = `${css} blur(6px)`     // bản mờ chồng lên
+videoSoft.style.opacity = filters.softness      // độ mờ = mức "làm mịn"
+```
+
+Cả hai element cùng `srcObject` nên **không tốn thêm băng thông hay decode** — chỉ là hai lần vẽ từ một nguồn, GPU composite.
+
+**Phân chia filter và transform:**
+- Màu sắc (`brightness`, `contrast`, `saturate`, `hue`, `grayscale`, `sepia`) → `style.filter`
+- `zoom` → nối vào `style.transform` cùng với rotation/flip, vì nó là biến đổi hình học chứ không phải màu
+
+`applyTransform()` phải áp cho **cả hai lớp**, và vẫn giữ quy tắc hoán đổi `width`/`height` ở 90°/270° (xem 5.6).
+
+**Panel chỉnh nằm ngay trên viewer.** Slider áp filter **local trước rồi mới lưu**, việc ghi đĩa và báo các trang khác được gom lại sau 300ms — nên kéo slider mượt từng frame thay vì giật theo nhịp round-trip. Chỉnh từ `control.html` cũng được nhưng phải chờ một vòng mạng.
+
+Panel đóng theo thanh điều khiển (`hideControls`, nút ✕). Không có ràng buộc này thì nó nằm lại trên khung hình mà không còn nút nào để tắt, và **OBS sẽ thu cả panel vào stream**.
+
+**`fit`: `cover` hay `contain`.** `cover` lấp đầy màn hình nhưng cắt rìa — nguồn 1080×720 trên màn 1920×1080 bị phóng 1.78× và mất ~25% chiều cao. `contain` giữ toàn bộ khung camera, đổi lại có viền đen. Đổi được ngay trên viewer vì đây là thứ phải nhìn mới quyết được.
+
+**Gợi ý bitrate.** `recommendedBitrate()` tính từ số pixel mỗi giây (~0.1 bit/pixel/frame) thay vì tra bảng, nên kích thước tuỳ chỉnh và fps bất kỳ đều ra con số hợp lý. Làm tròn tới bội số 0.5 Mbps **gần nhất** chứ không làm tròn lên — 1080p ra 6.22 Mbps, ép lên 6.5 thì không khớp mức nào trong dropdown. Vì phần lớn mức đề xuất (3, 11, 25 Mbps) không có sẵn, cả độ phân giải lẫn bitrate đều phải có đường nhập tay; thiếu nó thì cảnh báo chỉ ra lệnh mà không cho cách thực hiện.
+
+**Giới hạn cố ý:** CSS filter áp cho toàn khung hình. "Làm mịn" ở đây là soft glow chứ không phải bilateral filter, và không xoá được phông. Muốn hai thứ đó phải sang Tầng B (xem R7).
+
+**Không đặt ở phone được:** CSS filter trên `<video>` của phone chỉ đổi lúc **hiển thị** — track gửi qua WebRTC vẫn là track gốc từ `getUserMedia`. Muốn hiệu ứng đi vào stream thì phải qua `canvas.captureStream()` hoặc Insertable Streams, đắt hơn nhiều.
+
+---
+
+### 5.11 `init.js`
 
 Bốn bước: kiểm `node_modules` → sinh cert → kiểm `config.json` → dò ADB.
 
@@ -686,7 +728,7 @@ Không còn. `setStatus()` ở `viewer.html` trước đây định nghĩa mà k
 
 ### Ưu tiên 3 — tính năng
 
-**R7 · Filter/hiệu ứng hình ảnh ở viewer.** Đã có kế hoạch hai tầng: Tầng A dùng CSS filter (rẻ, chỉnh realtime qua `control.html` nhờ hạ tầng config sẵn có), Tầng B dùng WebGL/canvas cho xoá phông và làm mịn da thật. Chưa implement.
+**R7 · Tầng B của bộ lọc hình ảnh.** Tầng A (CSS filter) **đã làm** — xem mục 5.10. Tầng B cần pipeline khác hẳn: `<video>` ẩn → xử lý từng frame bằng WebGL/canvas → `<canvas>` cho OBS capture. Chỉ khi đó mới có xoá/thay phông (MediaPipe Selfie Segmentation), làm mịn da thật (bilateral filter — mờ vùng phẳng nhưng giữ cạnh), LUT `.cube`, chroma key. Đánh đổi: tốn GPU của PC, thêm thư viện, và phải viết lại rotation/flip/`object-fit` bên trong canvas.
 
 **R8 · Ghi hình phía viewer** bằng `MediaRecorder`.
 

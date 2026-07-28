@@ -224,6 +224,8 @@ Server listen trên `0.0.0.0`, nên nếu không có lớp này thì **bất k�
 | `flipV` | `true/false` | Lật dọc |
 | `rotation` | `0/90/180/270` | Xoay video |
 | `hideControls` | `true/false` | Ẩn thanh điều khiển |
+| `fit` | `cover` / `contain` | Lấp đầy màn hình (cắt rìa) hay vừa khung (thấy hết) |
+| `filters.*` | xem [Hiệu ứng hình ảnh](#hiệu-ứng-hình-ảnh) | Màu sắc, làm mịn, phóng to |
 
 **Camera điện thoại** (`phone.*`) — chỉ áp dụng khi phone **tắt rồi bật lại camera**, vì độ phân giải được set lúc mở camera. Riêng `maxBitrate` áp dụng ngay:
 
@@ -234,7 +236,27 @@ Server listen trên `0.0.0.0`, nên nếu không có lớp này thì **bất k�
 | `height` | `160`–`4096` | Chiều cao mong muốn (px) |
 | `frameRate` | `1`–`120` | Khung hình/giây |
 | `audio` | `true/false` | Gửi kèm mic của điện thoại. Mặc định tắt |
-| `maxBitrate` | `100000`–`20000000` | Trần bitrate (bit/s). Cao = nét hơn, cần băng thông tốt |
+| `maxBitrate` | `100000`–`30000000` | Trần bitrate (bit/s). Cao = nét hơn, cần băng thông tốt |
+
+Độ phân giải chọn từ dropdown dựng sẵn (VGA → 4K) hoặc **Tuỳ chỉnh…** để nhập kích thước riêng. Bitrate cũng vậy.
+
+> Camera điện thoại luôn xuất theo chiều ngang của sensor rồi mới để phần mềm xoay, nên đặt số "dọc" (ví dụ `720×1080`) không có tác dụng như bạn nghĩ — máy vẫn trả về `1080×720`. Cứ đặt theo chiều ngang.
+
+### Bitrate cần bao nhiêu
+
+Chọn độ phân giải cao mà giữ nguyên bitrate thì hình **tệ hơn** lúc đầu — cùng ngần ấy bit phải trải cho nhiều pixel hơn. App tự cảnh báo khi phát hiện lệch:
+
+> ⚠ 1920×1080 @30fps nên dùng từ 6 Mbps — đang đặt 4 Mbps, hình dễ bị bết.
+
+| Độ phân giải @30fps | Bitrate nên dùng |
+|---|---|
+| 640 × 480 | 1 Mbps |
+| 1280 × 720 | 3 Mbps |
+| 1920 × 1080 | 6 Mbps |
+| 2560 × 1440 | 11 Mbps |
+| 3840 × 2160 | 25 Mbps |
+
+Con số tính từ số pixel mỗi giây (~0.1 bit/pixel/frame) nên fps cũng được tính vào: 1080p ở 60fps cần 12.5 Mbps chứ không phải 6.
 
 Giá trị ngoài dải sẽ bị server **từ chối** và giữ nguyên giá trị cũ.
 
@@ -255,6 +277,42 @@ Ngoài flip/xoay, trang phone còn chạm được vào **năng lực phần c�
 | 🔍 **Zoom** | `getCapabilities().zoom` | Thanh trượt hiện phía trên quick bar |
 
 > **Không có "làm đẹp" / xoá phông.** Trình duyệt mở camera qua tầng hệ điều hành, không đi qua app Camera của hãng — nên các chế độ làm mịn da, chân dung, AI scene của Samsung/Xiaomi/OPPO đều không dùng được từ web. Muốn có thì phải tự xử lý ảnh (ở viewer bằng CSS filter / WebGL, hoặc dùng filter sẵn có của OBS).
+
+---
+
+## Hiệu ứng hình ảnh
+
+Bấm **🎨 Hiệu ứng** trên thanh điều khiển của viewer → panel slider mở ra ngay cạnh khung hình. Kéo slider là hình đổi **tức thì từng frame**, mắt vẫn nhìn thẳng vào video mà chỉnh.
+
+Cũng chỉnh được từ [control.html](public/control.html) (tiện khi cầm điện thoại chỉnh trong lúc ngồi trước camera) — hai nơi đồng bộ hai chiều.
+
+| Slider | Dải | Dùng để |
+|---|---|---|
+| Độ sáng | 50–150% | Phòng tối, ngược sáng |
+| Tương phản | 50–150% | Hình bị "đục", bệt |
+| Bão hoà màu | 0–200% | Da nhợt nhạt, hoặc màu quá gắt |
+| Tông màu | −30°…+30° | Ám vàng đèn tuýp (âm = ấm, dương = lạnh) |
+| Làm mịn | 0–100% | Chồng một lớp mờ nhẹ lên bản sắc nét |
+| Đen trắng / Ngả nâu | 0–100% | |
+| Phóng to | 1.00–3.00× | Crop khung cho chặt hơn, không đụng tới camera |
+
+**Preset một chạm:** Gốc · Ấm · Lạnh · Điện ảnh · Phòng tối · Mịn da · Đen trắng.
+Preset chỉ đổi màu sắc, **giữ nguyên mức phóng to** — canh khung xong rồi đổi tông màu thì khung không nhảy.
+
+### Khung hình: lấp đầy hay vừa khung
+
+Nút **⛶ Lấp đầy / ⬒ Vừa khung** trên viewer:
+
+| Chế độ | Kết quả | Dùng khi |
+|---|---|---|
+| **Lấp đầy** (`cover`) | Phủ kín màn hình, **cắt bớt rìa** | Thu vào OBS, không muốn viền đen |
+| **Vừa khung** (`contain`) | Thấy **toàn bộ** khung camera, có viền đen | Canh khung, kiểm tra xem camera bắt được những gì |
+
+Ở chế độ Lấp đầy, nguồn 1080×720 trên màn 1920×1080 bị phóng 1.78× và mất khoảng 25% chiều cao — nhìn kém nét hẳn. Nếu thấy hình "to quá" và mờ, thử chuyển sang Vừa khung.
+
+**Xử lý ở viewer, không ở điện thoại.** Đây là chủ ý: PC khoẻ hơn, phone chỉ lo encode nên không nóng thêm, và OBS Browser Source render cả trang nên thấy kết quả miễn phí. Hệ quả: **preview trên điện thoại sẽ không hiện hiệu ứng** — chỉ viewer/OBS mới thấy.
+
+> **Giới hạn của cách này:** CSS filter luôn áp cho **toàn khung hình**. "Làm mịn" ở đây là chồng lớp mờ (soft glow), không phải bilateral filter thật, và **không xoá được phông**. Muốn hai thứ đó cần xử lý bằng WebGL/canvas — xem R7 trong [docs/ARCHITECTURE_AUDIT.md](docs/ARCHITECTURE_AUDIT.md).
 
 ---
 
@@ -299,6 +357,24 @@ Thường do máy có nhiều card mạng (Docker, WSL, VirtualBox, VMware, VPN,
 ### Phone báo 401 Unauthorized
 
 Thiết bị trong LAN cần token. Quét lại QR WiFi trong terminal (QR đã kèm token), hoặc copy URL đầy đủ mà terminal in ra. Xem mục [Xác thực (token)](#xác-thực-token).
+
+### Hình không nét
+
+Kiểm tra theo thứ tự tác động:
+
+1. **Thu nhỏ cửa sổ viewer xuống nửa màn hình.** Nếu nét hẳn lên → nguyên nhân là ảnh bị phóng to, không phải chất lượng nguồn. Chuyển sang **⬒ Vừa khung** hoặc tăng độ phân giải.
+2. **Đối chiếu bitrate với bảng ở trên.** Nếu app hiện cảnh báo vàng thì đó chính là vấn đề.
+3. **Ánh sáng.** Thiếu sáng → camera đẩy ISO → nhiễu hạt → encoder tiêu bit cho nhiễu thay vì chi tiết. Thêm đèn thường hiệu quả hơn tăng bitrate.
+4. **Khoảng lấy nét.** Camera điện thoại có khoảng tối thiểu; đặt vật quá gần là mờ đều dù thông số cao đến đâu. Lùi ra 30–40cm.
+5. **OBS scale hai lần.** Đặt Browser Source đúng bằng kích thước canvas OBS, nếu không luồng bị phóng hai lần liên tiếp.
+
+### Hình bị ngược trái–phải
+
+Đây là hành vi **đúng**, không phải lỗi. Camera nhìn bạn như một người đứng đối diện, nên tay trái của bạn xuất hiện ở bên phải màn hình. `getUserMedia` không bao giờ tự lật ảnh.
+
+Hiệu ứng gương (giơ tay trái thấy bên trái) là thứ Zoom/Meet thêm vào **preview của riêng bạn**, còn luồng gửi đi cho người khác thì vẫn không lật. FaceCam chỉ có một luồng nên mặc định để không lật — đúng cho người xem.
+
+Muốn lật thì bấm **⇔ Flip H**, nhưng lưu ý mọi chữ trong khung hình sẽ bị ngược.
 
 ### Video lag
 
@@ -354,6 +430,15 @@ adb shell dumpsys window windows | findstr mAlertWindowSurfaces
 ---
 
 ## Changelog
+
+### 2026-07-28
+- **Panel hiệu ứng ngay trên viewer** (🎨) — kéo slider thấy đổi tức thì, không phải mở tab khác
+- **Chọn khung hình** lấp đầy ↔ vừa khung, xử lý việc `cover` cắt mất ~25% khung và phóng to làm mất nét
+- **Dropdown độ phân giải** dựng sẵn VGA → 4K, kèm mục Tuỳ chỉnh; bitrate cũng vậy
+- **Cảnh báo bitrate** khi độ phân giải cao mà băng thông không đủ; trần nâng 20 → 30 Mbps để 4K đạt được mức đề xuất
+- Sửa dropdown chữ trắng trên nền trắng (`color-scheme: dark`) — ảnh hưởng mọi `<select>` trong app
+- Sửa thanh trạng thái viewer hiện thừa một chấm xanh
+- Thông báo lỗi kết nối phân biệt ICE thất bại với "có luồng nhưng không phát được"
 
 ### 2026-07-27
 **Sửa lỗi**
