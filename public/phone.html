@@ -6,6 +6,10 @@
 <title>FaceCam</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📷</text></svg>">
 <style>
+  /* Popup của <select> do hệ điều hành vẽ, không nhận màu từ CSS của select —
+     chữ trắng của ta rơi trên nền trắng mặc định và biến mất */
+  :root { color-scheme: dark; }
+
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
   body {
@@ -121,6 +125,7 @@
     font-size: 13px;
     max-width: 180px;
   }
+  #camSelect option { background: #16161c; color: #fff; }
 
   /* Quick bar */
   #quickBar {
@@ -256,7 +261,22 @@
     min-width: 110px;
     text-align: right;
   }
+  /* Dự phòng cho trình duyệt chưa hỗ trợ color-scheme */
+  .cfg-row select option { background: #16161c; color: #fff; }
   .cfg-row input[type=number] { width: 80px; }
+
+  .warn-hint {
+    background: rgba(245,158,11,0.08);
+    border: 1px solid rgba(245,158,11,0.25);
+    color: #fbbf24;
+    font-size: 12px; line-height: 1.5;
+    padding: 10px 14px; border-radius: 12px; margin-top: 4px;
+  }
+  .warn-hint[hidden] { display: none; }
+
+  .res-inputs { display: flex; align-items: center; gap: 6px; }
+  .res-inputs span { color: #666; font-size: 13px; }
+  .res-inputs input[type=number] { width: 66px; min-width: 0; text-align: center; }
 
   .save-btn {
     margin-top: 16px;
@@ -358,18 +378,22 @@
 
     <div class="cfg-row">
       <div>
-        <div class="cfg-row-label">Chiều rộng</div>
-        <div class="cfg-row-sub">pixels</div>
+        <div class="cfg-row-label">Độ phân giải</div>
+        <div class="cfg-row-sub">cao hơn cần bitrate cao hơn</div>
       </div>
-      <input id="cfg-width" type="number" value="1280">
+      <select id="cfg-resPreset"></select>
     </div>
 
-    <div class="cfg-row">
+    <div class="cfg-row" id="cfg-customRes" hidden>
       <div>
-        <div class="cfg-row-label">Chiều cao</div>
-        <div class="cfg-row-sub">pixels</div>
+        <div class="cfg-row-label">Kích thước riêng</div>
+        <div class="cfg-row-sub">rộng × cao, 160–4096</div>
       </div>
-      <input id="cfg-height" type="number" value="720">
+      <div class="res-inputs">
+        <input id="cfg-width" type="number" min="160" max="4096" value="1280">
+        <span>×</span>
+        <input id="cfg-height" type="number" min="160" max="4096" value="720">
+      </div>
     </div>
 
     <div class="cfg-row">
@@ -405,8 +429,26 @@
         <option value="4000000" selected>4 Mbps (giữa)</option>
         <option value="6000000">6 Mbps (cao)</option>
         <option value="8000000">8 Mbps (rất cao)</option>
+        <option value="12000000">12 Mbps (2K)</option>
+        <option value="16000000">16 Mbps</option>
+        <option value="20000000">20 Mbps</option>
+        <option value="25000000">25 Mbps (4K)</option>
+        <option value="custom">Tuỳ chỉnh…</option>
       </select>
     </div>
+
+    <div class="cfg-row" id="cfg-customBr" hidden>
+      <div>
+        <div class="cfg-row-label">Bitrate riêng</div>
+        <div class="cfg-row-sub">0.5–30 Mbps</div>
+      </div>
+      <div class="res-inputs">
+        <input id="cfg-brCustom" type="number" step="0.5" min="0.5" max="30">
+        <span>Mbps</span>
+      </div>
+    </div>
+
+    <div class="warn-hint" id="cfg-brHint" hidden></div>
 
     <div class="section-label">🖥️ Viewer (PC)</div>
 
@@ -457,7 +499,7 @@
 <script src="/socket.io/socket.io.js"></script>
 <script src="/shared.js"></script>
 <script>
-const { ROOM, ROLE, EV, RTC_CONFIG, fetchConfig, saveConfig } = FaceCam
+const { ROOM, ROLE, EV, RTC_CONFIG, RESOLUTIONS, matchResolution, bitrateWarning, fetchConfig, saveConfig } = FaceCam
 const socket = io()
 const statusEl = document.getElementById('status')
 const preview = document.getElementById('preview')
@@ -487,17 +529,99 @@ function refreshStreamStatus() {
   else if (localStream) setStatus('Chờ viewer kết nối...')
 }
 
+// --- độ phân giải: dropdown dựng sẵn + tuỳ chỉnh ---
+const resPreset = document.getElementById('cfg-resPreset')
+const customRes = document.getElementById('cfg-customRes')
+
+RESOLUTIONS.forEach((r, i) => resPreset.add(new Option(r.label, String(i))))
+resPreset.add(new Option('Tuỳ chỉnh…', 'custom'))
+
+// Kích thước không khớp preset nào thì rơi vào "Tuỳ chỉnh" và mở sẵn hai ô,
+// không im lặng nắn về preset gần nhất
+function refreshResolutionUI() {
+  const idx = matchResolution(phoneCfg.width, phoneCfg.height)
+  resPreset.value = idx >= 0 ? String(idx) : 'custom'
+  customRes.hidden = idx >= 0
+  document.getElementById('cfg-width').value = phoneCfg.width
+  document.getElementById('cfg-height').value = phoneCfg.height
+  updateBitrateHint()
+}
+
+// Panel này lưu bằng nút, nên cảnh báo phải đọc giá trị đang chọn trên form —
+// đọc phoneCfg sẽ ra thông tin cũ trong lúc người dùng còn đang chỉnh
+// Bitrate có thể đang ở chế độ tuỳ chỉnh — lúc đó select mang giá trị 'custom',
+// đọc thẳng sẽ ra NaN
+function panelBitrate() {
+  const sel = document.getElementById('cfg-maxBitrate')
+  if (sel.value === 'custom') {
+    return Math.round(Number(document.getElementById('cfg-brCustom').value) * 1000000)
+  }
+  return Number(sel.value)
+}
+
+function panelPhoneValues() {
+  return {
+    width: Number(document.getElementById('cfg-width').value),
+    height: Number(document.getElementById('cfg-height').value),
+    frameRate: Number(document.getElementById('cfg-frameRate').value),
+    maxBitrate: panelBitrate(),
+  }
+}
+
+// --- bitrate: mức dựng sẵn + tuỳ chỉnh ---
+const brSelect = document.getElementById('cfg-maxBitrate')
+const customBr = document.getElementById('cfg-customBr')
+const brCustom = document.getElementById('cfg-brCustom')
+
+function refreshBitrateUI() {
+  const v = String(phoneCfg.maxBitrate)
+  const known = [...brSelect.options].some(o => o.value === v)
+  brSelect.value = known ? v : 'custom'
+  customBr.hidden = known
+  brCustom.value = phoneCfg.maxBitrate / 1000000
+}
+
+brSelect.addEventListener('change', () => {
+  if (brSelect.value === 'custom') { customBr.hidden = false; return }
+  customBr.hidden = true
+  brCustom.value = Number(brSelect.value) / 1000000
+})
+
+const brHint = document.getElementById('cfg-brHint')
+function updateBitrateHint() {
+  const msg = bitrateWarning(panelPhoneValues())
+  brHint.hidden = !msg
+  if (msg) brHint.textContent = '⚠ ' + msg
+}
+
+// Chỉ đổi ô nhập, chưa lưu — panel này lưu bằng nút "Lưu & Áp dụng"
+resPreset.addEventListener('change', () => {
+  if (resPreset.value !== 'custom') {
+    const r = RESOLUTIONS[Number(resPreset.value)]
+    customRes.hidden = true
+    document.getElementById('cfg-width').value = r.w
+    document.getElementById('cfg-height').value = r.h
+  } else {
+    customRes.hidden = false
+  }
+  updateBitrateHint()
+})
+
+// Mọi thay đổi trong panel đều cập nhật cảnh báo — gắn một chỗ thay vì
+// từng select riêng
+settingsPanel.addEventListener('input', updateBitrateHint)
+settingsPanel.addEventListener('change', updateBitrateHint)
+
 function loadCfgToUI(c) {
   cfg = c
   phoneCfg = { ...phoneCfg, ...(c.phone || {}) }
   facingMode = phoneCfg.facingMode
 
   document.getElementById('cfg-facingMode').value = phoneCfg.facingMode
-  document.getElementById('cfg-width').value = phoneCfg.width
-  document.getElementById('cfg-height').value = phoneCfg.height
+  refreshResolutionUI()
   document.getElementById('cfg-frameRate').value = phoneCfg.frameRate
   document.getElementById('cfg-audio').value = String(!!phoneCfg.audio)
-  document.getElementById('cfg-maxBitrate').value = String(phoneCfg.maxBitrate)
+  refreshBitrateUI()
   document.getElementById('cfg-flipH').value = String(c.flipH ?? false)
   document.getElementById('cfg-flipV').value = String(c.flipV ?? false)
   document.getElementById('cfg-rotation').value = String(c.rotation ?? 0)
@@ -525,7 +649,7 @@ document.getElementById('saveBtn').addEventListener('click', async () => {
       height: Number(document.getElementById('cfg-height').value),
       frameRate: Number(document.getElementById('cfg-frameRate').value),
       audio: document.getElementById('cfg-audio').value === 'true',
-      maxBitrate: Number(document.getElementById('cfg-maxBitrate').value),
+      maxBitrate: panelBitrate(),
     }
   }
   try {
