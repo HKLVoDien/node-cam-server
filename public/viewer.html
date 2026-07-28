@@ -5,10 +5,24 @@
 <title>FaceCam - Viewer</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🖥️</text></svg>">
 <style>
+  :root { color-scheme: dark; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { background: #000; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 
-  video { width: 100vw; height: 100vh; object-fit: cover; transition: transform 0.2s; }
+  video {
+    width: 100vw; height: 100vh;
+    object-fit: cover;
+    transition: transform 0.2s;
+    position: absolute;
+    top: 50%; left: 50%;
+    margin: 0;
+    /* translate giữ element ở giữa; rotate/scale được applyTransform nối thêm */
+    transform-origin: center;
+  }
+  /* Lớp làm mịn da: cùng một stream, blur nhẹ chồng lên bản sắc nét.
+     Đây là cách gần nhất với "làm mịn" mà CSS thuần làm được — không phải
+     bilateral filter thật, nhưng gần như miễn phí vì GPU composite. */
+  #videoSoft { pointer-events: none; opacity: 0; }
 
   #controls {
     position: fixed;
@@ -43,6 +57,7 @@
   }
   .ctrl-btn:hover { background: rgba(255,255,255,0.14); color: #fff; }
   .ctrl-btn.active { background: #3b82f6; color: #fff; }
+  a.ctrl-btn { text-decoration: none; }
 
   .ctrl-divider {
     width: 1px;
@@ -76,6 +91,66 @@
 
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
+  /* Panel hiệu ứng — chỉnh ngay trên viewer để nhìn kết quả cùng lúc, khỏi
+     phải mở control.html ở tab khác */
+  #fxPanel {
+    display: none;
+    position: fixed;
+    right: 20px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 300px;
+    max-height: 80vh;
+    overflow-y: auto;
+    background: rgba(10,10,10,0.82);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 16px;
+    padding: 14px 16px 18px;
+    z-index: 30;
+    font-size: 13px;
+  }
+  #fxPanel.open { display: block; }
+
+  .fx-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .fx-head span { font-size: 13px; font-weight: 600; color: #fff; }
+  .fx-head button {
+    background: rgba(255,255,255,0.08); border: none; color: #aaa;
+    width: 24px; height: 24px; border-radius: 6px; cursor: pointer; font-size: 12px;
+  }
+  .fx-head button:hover { background: rgba(255,255,255,0.16); color: #fff; }
+
+  .fx-presets { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 14px; }
+  .fx-presets button {
+    background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.1);
+    color: #bbb; padding: 5px 10px; border-radius: 8px; cursor: pointer; font-size: 12px;
+  }
+  .fx-presets button:hover { background: rgba(255,255,255,0.15); color: #fff; }
+
+  .fx-row { margin-bottom: 11px; }
+  .fx-row-top {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 4px;
+  }
+  .fx-row-top label { color: #ccc; }
+  .fx-row-top .val {
+    color: #777; font-size: 11px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .fx-row input[type=range] { width: 100%; accent-color: #3b82f6; display: block; }
+
+  @media (max-width: 640px) {
+    #fxPanel {
+      right: 12px; left: 12px; width: auto;
+      top: auto; bottom: 88px; transform: none;
+      max-height: 60vh;
+    }
+  }
+
   .hide-btn {
     background: transparent;
     border: none;
@@ -92,6 +167,7 @@
 </head>
 <body>
 <video id="video" autoplay playsinline muted></video>
+<video id="videoSoft" autoplay playsinline muted></video>
 
 <div id="controls">
   <div id="status"><div class="dot"></div> Chờ phone...</div>
@@ -100,16 +176,29 @@
   <button class="ctrl-btn" id="flipH">⇔ Flip H</button>
   <button class="ctrl-btn" id="flipV">⇕ Flip V</button>
   <button class="ctrl-btn" id="rot90">↻ 90°</button>
+  <button class="ctrl-btn" id="fitBtn" title="Lấp đầy màn hình (cắt rìa) ↔ vừa khung (thấy toàn bộ)">⛶ Lấp đầy</button>
+  <button class="ctrl-btn" id="fxBtn" title="Hiệu ứng màu sắc, làm mịn, phóng to">🎨 Hiệu ứng</button>
   <div class="ctrl-divider"></div>
+  <a class="ctrl-btn" href="/control.html" target="_blank" title="Cấu hình camera (độ phân giải, bitrate, mic)">🎛️</a>
   <button class="hide-btn" id="hideBtn" title="Ẩn controls (double-click để hiện lại)">✕</button>
+</div>
+
+<div id="fxPanel">
+  <div class="fx-head">
+    <span>🎨 Hiệu ứng</span>
+    <button id="fxClose" title="Đóng">✕</button>
+  </div>
+  <div class="fx-presets" id="fxPresets"></div>
+  <div id="fxSliders"></div>
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
 <script src="/shared.js"></script>
 <script>
-const { ROOM, ROLE, EV, RTC_CONFIG, fetchConfig, saveConfig } = FaceCam
+const { ROOM, ROLE, EV, RTC_CONFIG, FILTER_LABELS, FILTER_PRESETS, formatFilterValue, fetchConfig, saveConfig } = FaceCam
 const socket = io()
 const video = document.getElementById('video')
+const videoSoft = document.getElementById('videoSoft')
 const statusEl = document.getElementById('status')
 const statsEl = document.getElementById('stats')
 
@@ -118,15 +207,62 @@ let phoneId = null        // socket id của phone — cần để gửi answer/
 let retryTimer = null
 let statsTimer = null
 let pendingIce = []
+let playbackWatch = null
 let fH = false, fV = false, rot = 0
+let fit = 'cover'
+let filters = { brightness: 1, contrast: 1, saturate: 1, hue: 0, grayscale: 0, sepia: 0, softness: 0, zoom: 1 }
+
+const LAYERS = [video, videoSoft]
+const fitBtn = document.getElementById('fitBtn')
+
+// cover = lấp đầy nhưng cắt rìa. Nguồn 1080x720 trên màn 1920x1080 bị phóng
+// 1.78x và mất ~25% chiều cao — nét kém hẳn. contain giữ nguyên tỉ lệ, thấy
+// toàn bộ khung camera, đổi lại có viền đen.
+function applyFit() {
+  for (const el of LAYERS) el.style.objectFit = fit
+  fitBtn.textContent = fit === 'cover' ? '⛶ Lấp đầy' : '⬒ Vừa khung'
+  fitBtn.classList.toggle('active', fit === 'contain')
+}
 
 function applyTransform() {
   // rotate() không đổi layout box → ở 90/270 phải hoán đổi kích thước element
   // trước khi xoay, nếu không object-fit: cover sẽ crop/kéo giãn sai khung hình
   const swap = rot === 90 || rot === 270
-  video.style.width = swap ? '100vh' : '100vw'
-  video.style.height = swap ? '100vw' : '100vh'
-  video.style.transform = `rotate(${rot}deg) scaleX(${fH ? -1 : 1}) scaleY(${fV ? -1 : 1})`
+  const zoom = filters.zoom ?? 1
+  const t = `translate(-50%, -50%) rotate(${rot}deg) scaleX(${fH ? -1 : 1}) scaleY(${fV ? -1 : 1}) scale(${zoom})`
+  for (const el of LAYERS) {
+    el.style.width = swap ? '100vh' : '100vw'
+    el.style.height = swap ? '100vw' : '100vh'
+    el.style.transform = t
+  }
+}
+
+// CSS filter chạy trên GPU nên gần như không tốn gì, và OBS Browser Source render
+// cả trang nên thấy kết quả ngay — không cần đụng vào stream phone gửi đi.
+function applyFilter() {
+  const f = filters
+  const css = [
+    `brightness(${f.brightness ?? 1})`,
+    `contrast(${f.contrast ?? 1})`,
+    `saturate(${f.saturate ?? 1})`,
+    `hue-rotate(${f.hue ?? 0}deg)`,
+    `grayscale(${f.grayscale ?? 0})`,
+    `sepia(${f.sepia ?? 0})`,
+  ].join(' ')
+
+  video.style.filter = css
+  // Lớp mịn dùng cùng bộ filter + blur, độ mờ chính là mức "làm mịn"
+  videoSoft.style.filter = `${css} blur(6px)`
+  videoSoft.style.opacity = f.softness ?? 0
+}
+
+function loadFilters(cfg) {
+  filters = { ...filters, ...(cfg.filters || {}) }
+  fit = cfg.fit === 'contain' ? 'contain' : 'cover'
+  applyFilter()
+  applyFit()
+  applyTransform()   // zoom nằm trong filters nên transform phải chạy lại
+  refreshFxUI()      // config đổi từ control.html → slider trong panel bám theo
 }
 
 function setStatus(text, state = '') {
@@ -152,7 +288,7 @@ fetchConfig().then(cfg => {
   document.getElementById('flipH').classList.toggle('active', fH)
   document.getElementById('flipV').classList.toggle('active', fV)
   if (cfg.hideControls) controls.style.display = 'none'
-  applyTransform()
+  loadFilters(cfg)
 }).catch(e => console.warn('Không tải được config:', e.message))
 
 document.getElementById('flipH').addEventListener('click', function() {
@@ -164,8 +300,83 @@ document.getElementById('flipV').addEventListener('click', function() {
 document.getElementById('rot90').addEventListener('click', function() {
   rot = (rot + 90) % 360; applyTransform(); pushConfig({ rotation: rot })
 })
+fitBtn.addEventListener('click', () => {
+  fit = fit === 'cover' ? 'contain' : 'cover'
+  applyFit(); pushConfig({ fit })
+})
+
+// ── Panel hiệu ứng ──────────────────────────────────────────────────────────
+// Áp filter ngay tại chỗ rồi mới lưu, nên kéo slider là thấy đổi tức thì —
+// không chờ round-trip qua server như khi chỉnh từ control.html
+const fxPanel = document.getElementById('fxPanel')
+const fxSliders = document.getElementById('fxSliders')
+
+function buildFxPanel(ranges) {
+  fxSliders.innerHTML = ''
+  for (const [key, [min, max]] of Object.entries(ranges)) {
+    const row = document.createElement('div')
+    row.className = 'fx-row'
+    row.innerHTML = `
+      <div class="fx-row-top">
+        <label for="fx-${key}">${FILTER_LABELS[key] ?? key}</label>
+        <span class="val" id="fxval-${key}"></span>
+      </div>
+      <input type="range" id="fx-${key}" data-filter="${key}"
+             min="${min}" max="${max}" step="${key === 'hue' ? 1 : 0.01}">`
+    fxSliders.appendChild(row)
+
+    const input = row.querySelector('input')
+    input.addEventListener('input', () => {
+      filters[key] = Number(input.value)
+      applyFilter()
+      if (key === 'zoom') applyTransform()
+      document.getElementById(`fxval-${key}`).textContent = formatFilterValue(key, filters[key])
+      queueFilterSave()
+    })
+  }
+
+  const fxPresets = document.getElementById('fxPresets')
+  fxPresets.innerHTML = ''
+  for (const name of Object.keys(FILTER_PRESETS)) {
+    const btn = document.createElement('button')
+    btn.textContent = name
+    btn.addEventListener('click', () => {
+      filters = { ...filters, ...FILTER_PRESETS[name] }
+      applyFilter(); applyTransform(); refreshFxUI()
+      pushConfig({ filters })
+    })
+    fxPresets.appendChild(btn)
+  }
+  refreshFxUI()
+}
+
+function refreshFxUI() {
+  for (const key of Object.keys(FILTER_LABELS)) {
+    const input = document.getElementById(`fx-${key}`)
+    const val = document.getElementById(`fxval-${key}`)
+    if (input && filters[key] !== undefined) input.value = filters[key]
+    if (val && filters[key] !== undefined) val.textContent = formatFilterValue(key, filters[key])
+  }
+}
+
+// Kéo slider bắn hàng chục event mỗi giây — gom lại rồi mới ghi đĩa và báo
+// các trang khác, nhưng hình trên màn hình vẫn đổi ngay từng frame
+let fxSaveTimer = null
+function queueFilterSave() {
+  clearTimeout(fxSaveTimer)
+  fxSaveTimer = setTimeout(() => pushConfig({ filters }), 300)
+}
+
+document.getElementById('fxBtn').addEventListener('click', () => fxPanel.classList.toggle('open'))
+document.getElementById('fxClose').addEventListener('click', () => fxPanel.classList.remove('open'))
+
+fetch('/api/filter-ranges').then(r => r.json()).then(buildFxPanel)
+  .catch(e => console.warn('Không tải được dải filter:', e.message))
 document.getElementById('hideBtn').addEventListener('click', () => {
   controls.style.display = 'none'
+  // Panel phải đóng theo, không thì nó nằm lại trên khung hình mà không còn
+  // nút nào để tắt — và OBS sẽ thu luôn cả panel
+  fxPanel.classList.remove('open')
   pushConfig({ hideControls: true })
 })
 document.addEventListener('dblclick', () => {
@@ -221,9 +432,34 @@ function startStats() {
 
 function stopStats() {
   clearInterval(statsTimer)
+  clearTimeout(playbackWatch)
   lastBytes = 0
   lastStatsAt = 0
   statsEl.textContent = ''
+}
+
+// Bắt tay signaling xong mà hình vẫn đen là triệu chứng của hai lỗi hoàn toàn
+// khác nhau — ICE không ghép được đường truyền, hay có luồng nhưng không phát
+// được. Nói "Mất kết nối" cho cả hai thì không debug được gì.
+function watchPlayback() {
+  clearTimeout(playbackWatch)
+  playbackWatch = setTimeout(() => {
+    if (!pc || pc.connectionState !== 'connected') return
+    if (video.readyState === 0) {
+      setStatus('Có luồng nhưng không phát được — thử bấm vào màn hình', 'error')
+      console.warn('ontrack đã chạy nhưng video.readyState vẫn 0 sau 5s.',
+        'Thường do autoplay policy hoặc track không có dữ liệu.')
+    }
+  }, 5000)
+}
+
+// Nói rõ ICE hỏng ở đâu. `failed` gần như luôn nghĩa là hai máy không có đường
+// đi trực tiếp: khác subnet, AP isolation, hoặc mở viewer trên chính điện thoại
+// đang gửi (gói phải vòng qua router rồi quay lại — nhiều router làm hỏng).
+function describeIceFailure(state) {
+  if (state === 'failed') return 'Không ghép được đường truyền (ICE failed) — hai máy có cùng mạng WiFi không?'
+  if (state === 'disconnected') return 'Đường truyền gián đoạn — đang chờ nối lại'
+  return 'Mất kết nối'
 }
 
 async function keepAlive() {
@@ -289,18 +525,34 @@ socket.on(EV.OFFER, async ({ from, sdp }) => {
     pendingIce = []
     pc = new RTCPeerConnection(RTC_CONFIG)
     pc.ontrack = ({ streams }) => {
+      // Cả hai lớp dùng chung một MediaStream — không tốn thêm băng thông hay
+      // decode, chỉ là hai element cùng vẽ một nguồn
       video.srcObject = streams[0]
-      setStatus('🟢 Đang stream', 'live')
+      videoSoft.srcObject = streams[0]
+      // Không thêm emoji 🟢 vào text: .dot đã là chấm xanh do CSS vẽ, thêm nữa
+      // là thành hai chấm cạnh nhau
+      setStatus('Đang stream', 'live')
       startStats()
+      watchPlayback()
     }
     pc.onicecandidate = ({ candidate }) => {
       if (candidate) socket.emit(EV.ICE, { to: phoneId, candidate })
     }
     pc.onconnectionstatechange = () => {
       if (['disconnected', 'failed'].includes(pc.connectionState)) {
-        setStatus('Mất kết nối', 'error')
+        setStatus(describeIceFailure(pc.iceConnectionState), 'error')
         stopStats()
+        clearTimeout(playbackWatch)
         startRetry()   // hỏi lại stream cho tới khi phone quay lại
+      }
+    }
+    // Trong lúc chưa có hình thì ô stats để trống — mượn nó hiện tiến trình ICE
+    // để biết đang kẹt ở bước nào
+    pc.oniceconnectionstatechange = () => {
+      if (!video.srcObject) statsEl.textContent = `ICE: ${pc.iceConnectionState}`
+      if (pc.iceConnectionState === 'failed') {
+        console.warn('ICE failed. iceServers rỗng nên chỉ ghép được bằng host candidate —',
+          'phone và máy này phải cùng subnet, không bật AP isolation.')
       }
     }
   }
@@ -335,7 +587,8 @@ socket.on(EV.CONFIG_UPDATED, () => {
     document.getElementById('flipH').classList.toggle('active', fH)
     document.getElementById('flipV').classList.toggle('active', fV)
     controls.style.display = cfg.hideControls ? 'none' : ''
-    applyTransform()
+    if (cfg.hideControls) fxPanel.classList.remove('open')
+    loadFilters(cfg)
   }).catch(e => console.warn('Không tải được config:', e.message))
 })
 
@@ -345,6 +598,7 @@ socket.on(EV.PHONE_DISCONNECTED, () => {
   // Bật lại vòng hỏi stream: trước đây retry đã tự tắt sau lần stream đầu tiên
   // nên phone quay lại cũng không ai yêu cầu offer mới → phải F5 thủ công
   video.srcObject = null
+  videoSoft.srcObject = null
   phoneId = null
   stopStats()
   startRetry()

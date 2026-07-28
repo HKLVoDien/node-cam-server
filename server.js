@@ -110,7 +110,29 @@ app.use(express.json())
 const CONFIG_PATH = path.join(__dirname, 'config.json')
 const DEFAULT_CONFIG = {
   flipH: false, flipV: false, rotation: 0, hideControls: false,
+  // 'cover' lấp đầy màn hình nhưng cắt rìa (hợp với OBS), 'contain' thấy toàn bộ
+  // khung camera nhưng có viền đen (hợp lúc canh khung)
+  fit: 'cover',
+  // Hiệu ứng hình ảnh — áp ở viewer bằng CSS filter, không đụng tới stream phone
+  // gửi đi. Đặt ở viewer vì PC khoẻ hơn và OBS render cả trang nên thấy ngay.
+  filters: {
+    brightness: 1, contrast: 1, saturate: 1, hue: 0,
+    grayscale: 0, sepia: 0, softness: 0, zoom: 1
+  },
   phone: { facingMode: 'environment', width: 1280, height: 720, frameRate: 30, maxBitrate: 4000000, audio: false }
+}
+
+// Miền giá trị hợp lệ cho từng filter. Tách ra thành bảng để control.html và
+// server không lệch nhau — client đọc luôn bảng này qua /api/config-schema.
+const FILTER_RANGES = {
+  brightness: [0.5, 1.5],
+  contrast: [0.5, 1.5],
+  saturate: [0, 2],
+  hue: [-30, 30],
+  grayscale: [0, 1],
+  sepia: [0, 1],
+  softness: [0, 1],
+  zoom: [1, 3],
 }
 const VALID_ROTATIONS = new Set([0, 90, 180, 270])
 
@@ -123,6 +145,14 @@ function intInRange(value, min, max, fallback) {
   return n
 }
 
+// Như intInRange nhưng cho số thực (filter dùng bước 0.01). Làm tròn 2 chữ số để
+// config.json không đầy những 1.0000000000000002 do lỗi dấu phẩy động.
+function numInRange(value, min, max, fallback) {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n < min || n > max) return fallback
+  return Math.round(n * 100) / 100
+}
+
 // Lọc key lạ + validate kiểu và miền giá trị. Field sai kiểu bị bỏ qua (giữ giá
 // trị hiện tại) thay vì ghi đè config bằng dữ liệu rác.
 function sanitizeConfig(body, current) {
@@ -130,7 +160,18 @@ function sanitizeConfig(body, current) {
   if (typeof body.flipH === 'boolean') out.flipH = body.flipH
   if (typeof body.flipV === 'boolean') out.flipV = body.flipV
   if (typeof body.hideControls === 'boolean') out.hideControls = body.hideControls
+  if (body.fit === 'cover' || body.fit === 'contain') out.fit = body.fit
   if (VALID_ROTATIONS.has(Number(body.rotation))) out.rotation = Number(body.rotation)
+
+  const f = body.filters
+  if (f && typeof f === 'object' && !Array.isArray(f)) {
+    const cur = current.filters
+    const filters = {}
+    for (const [key, [min, max]] of Object.entries(FILTER_RANGES)) {
+      if (f[key] !== undefined) filters[key] = numInRange(f[key], min, max, cur[key])
+    }
+    out.filters = { ...cur, ...filters }
+  }
 
   const p = body.phone
   if (p && typeof p === 'object' && !Array.isArray(p)) {
@@ -141,7 +182,9 @@ function sanitizeConfig(body, current) {
     if (p.width !== undefined) phone.width = intInRange(p.width, 160, 4096, cur.width)
     if (p.height !== undefined) phone.height = intInRange(p.height, 160, 4096, cur.height)
     if (p.frameRate !== undefined) phone.frameRate = intInRange(p.frameRate, 1, 120, cur.frameRate)
-    if (p.maxBitrate !== undefined) phone.maxBitrate = intInRange(p.maxBitrate, 100000, 20000000, cur.maxBitrate)
+    // Trần 30 Mbps chứ không phải 20: 4K@30 cần ~25 Mbps, chặn ở 20 thì cảnh báo
+    // bitrate không bao giờ tắt được dù người dùng đã chọn mức cao nhất
+    if (p.maxBitrate !== undefined) phone.maxBitrate = intInRange(p.maxBitrate, 100000, 30000000, cur.maxBitrate)
     // Merge sâu: client có thể chỉ gửi một phần object phone — shallow merge sẽ
     // xoá mất các key còn lại
     out.phone = { ...cur, ...phone }
@@ -152,9 +195,14 @@ function sanitizeConfig(body, current) {
 let configCache = { ...DEFAULT_CONFIG }
 try {
   const saved = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'))
-  // Merge sâu 1 cấp: nếu config.json có object phone thiếu key (file cũ không có
-  // maxBitrate chẳng hạn), shallow merge sẽ nuốt mất default của các key đó
-  configCache = { ...DEFAULT_CONFIG, ...saved, phone: { ...DEFAULT_CONFIG.phone, ...(saved.phone || {}) } }
+  // Merge sâu 1 cấp cho từng object lồng: nếu config.json thiếu key (file cũ
+  // chưa có maxBitrate hay chưa có filters), shallow merge sẽ nuốt mất default
+  configCache = {
+    ...DEFAULT_CONFIG,
+    ...saved,
+    filters: { ...DEFAULT_CONFIG.filters, ...(saved.filters || {}) },
+    phone: { ...DEFAULT_CONFIG.phone, ...(saved.phone || {}) },
+  }
 } catch (err) {
   // File thiếu (lần chạy đầu) hoặc JSON hỏng → dựng lại từ default để server luôn
   // khởi động được. Chỉ cảnh báo khi file có tồn tại mà parse lỗi.
@@ -183,6 +231,12 @@ function persistConfig() {
 
 app.get('/api/config', (req, res) => {
   res.json(configCache)
+})
+
+// control.html dựng slider từ đây thay vì hardcode min/max — một nguồn duy nhất
+// cho miền giá trị, khỏi lệch với validate phía server
+app.get('/api/filter-ranges', (req, res) => {
+  res.json(FILTER_RANGES)
 })
 
 app.post('/api/config', (req, res) => {
