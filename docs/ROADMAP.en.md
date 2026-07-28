@@ -93,7 +93,7 @@ The step that makes this usable by ordinary people.
 
 - Package with **Node SEA** (an official feature since Node 20) or `bun build --compile`. *Not `vercel/pkg` — it is no longer maintained.*
 - Bundle `adb` (Apache 2.0, redistributable), detect a plugged-in phone, run `adb reverse` automatically.
-- Open the browser automatically; pick a free port if the default is taken.
+- ~~Open the browser automatically~~ ✅ (landed early, in Phase 0); still to do: pick a free port if the default is taken.
 - Document clearly that the executable is unsigned, so Windows will show SmartScreen. Signing properly costs $250–500/year — for a free project, accept it and explain how to click through.
 
 Target experience: download one file → run it → plug in the cable → scan the QR code → done.

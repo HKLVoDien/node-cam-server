@@ -104,9 +104,9 @@ npm start        # chạy bình thường
 npm run dev      # tự restart khi sửa code (cần Node 18.11+)
 ```
 
-Terminal sẽ hiện:
-- QR code cho USB mode và WiFi mode
-- URL viewer cho PC
+Trang chủ `http://localhost:7070` **tự mở** trên trình duyệt mặc định. Terminal cũng in QR cho USB mode và WiFi mode.
+
+Không muốn nó tự mở thì đặt `FACECAM_OPEN=0`. Server cũng tự bỏ qua bước này khi đầu ra không phải terminal (chạy trong CI, hoặc `npm start > log.txt`).
 
 Đổi port bằng biến môi trường nếu 7070/7443 đã bị chiếm:
 ```bash

@@ -1,6 +1,8 @@
 const http = require('http')
 const https = require('https')
 const crypto = require('crypto')
+// Chỉ dùng để mở trình duyệt lúc khởi động
+const { spawn } = require('child_process')
 const fs = require('fs')
 const fsp = require('fs/promises')
 const path = require('path')
@@ -460,12 +462,42 @@ httpServer.on('error', (err) => {
   process.exit(1)   // HTTP là bắt buộc (viewer + USB mode) → không chạy tiếp được
 })
 
+// Mở sẵn trang chủ cho đỡ phải tự gõ địa chỉ.
+//
+// Chỉ làm khi đang chạy trong terminal thật (`stdout.isTTY`): `npm test` spawn
+// server với stdio pipe, không có điều kiện này thì mỗi lần chạy test sẽ bật thêm
+// một loạt tab trình duyệt. Chạy `npm start > log.txt` cũng không mở, và đó là
+// hành vi đúng.
+function openBrowser(url) {
+  if (process.env.FACECAM_OPEN === '0' || !process.stdout.isTTY) return
+
+  const [cmd, args] =
+    process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]] :
+    process.platform === 'darwin' ? ['open', [url]] :
+    ['xdg-open', [url]]
+
+  try {
+    // detached + unref: trình duyệt sống độc lập với server — Ctrl+C không giết
+    // nó, và server không phải chờ nó đóng mới thoát được
+    const child = spawn(cmd, args, { detached: true, stdio: 'ignore' })
+    // Máy Linux tối giản có thể không có xdg-open; không bắt lỗi thì thành
+    // unhandled error làm chết cả server chỉ vì không mở nổi tab
+    child.on('error', (err) => console.warn('[OPEN] Không mở được trình duyệt:', err.message))
+    child.unref()
+    console.log('[OPEN] Đang mở trang chủ trên trình duyệt mặc định')
+  } catch (err) {
+    console.warn('[OPEN] Không mở được trình duyệt:', err.message)
+  }
+}
+
 httpServer.listen(HTTP_PORT, '0.0.0.0', async () => {
-  const usbURL = `http://localhost:${HTTP_PORT}/phone.html`
+  const home = `http://localhost:${HTTP_PORT}`
+  const usbURL = `${home}/phone.html`
   const qr = await QRCode.toString(usbURL, { type: 'terminal', small: true })
-  console.log(`[HTTP]  http://localhost:${HTTP_PORT}  (USB mode)`)
+  console.log(`[HTTP]  ${home}  (USB mode)`)
   console.log('\nQR USB (phone cắm dây):')
   console.log(qr)
+  openBrowser(home)
 })
 
 // HTTPS server (WiFi mode)

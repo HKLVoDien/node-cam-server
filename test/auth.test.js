@@ -101,6 +101,24 @@ describe('trang 401', { skip: !listLocalIPs().length && 'máy không có card m�
   })
 })
 
+describe('mở trình duyệt lúc khởi động', () => {
+  // Test spawn server với stdio pipe → không phải TTY → không được mở gì. Thiếu
+  // điều kiện này thì mỗi lần `npm test` sẽ bật thêm một loạt tab.
+  test('không mở trình duyệt khi chạy không có terminal', () => {
+    assert.ok(!server.logs().includes('[OPEN]'),
+      'server đã mở trình duyệt trong lúc chạy test')
+  })
+
+  test('FACECAM_OPEN=0 cũng chặn được', async () => {
+    const quiet = await startServer({ env: { FACECAM_OPEN: '0' } })
+    try {
+      assert.ok(!quiet.logs().includes('[OPEN]'))
+    } finally {
+      await quiet.stop()
+    }
+  })
+})
+
 describe('token trên đĩa', () => {
   test('giữ nguyên qua các lần khởi động', async () => {
     // Sinh token mới mỗi lần chạy sẽ làm URL trong OBS Browser Source hỏng sau

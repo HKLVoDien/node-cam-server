@@ -98,7 +98,9 @@ npm start        # normal
 npm run dev      # restart on file changes
 ```
 
-The terminal prints two QR codes — one for USB mode, one for WiFi mode (with the token already embedded).
+The home page at `http://localhost:7070` **opens automatically** in your default browser. The terminal also prints two QR codes — one for USB mode, one for WiFi mode (with the token already embedded).
+
+Set `FACECAM_OPEN=0` if you'd rather it didn't. The server also skips this whenever its output isn't a terminal — running under CI, or `npm start > log.txt`.
 
 Change ports with environment variables:
 

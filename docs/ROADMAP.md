@@ -127,7 +127,7 @@ Bước biến nó thành thứ người thường xài được.
   `bun build --compile`. *Không dùng `vercel/pkg` — đã ngừng phát triển.*
 - Nhúng `adb` (Apache 2.0, phát hành lại được), tự dò phone cắm USB, tự chạy
   `adb reverse`.
-- Tự mở trình duyệt; tự chọn port trống nếu bị chiếm.
+- ~~Tự mở trình duyệt~~ ✅ (làm sớm ở G0); còn tự chọn port trống nếu bị chiếm.
 - README ghi rõ: exe không ký nên Windows hiện SmartScreen. Ký sạch tốn
   $250–500/năm — với OSS free thì chấp nhận và hướng dẫn bấm "Run anyway".
 
