@@ -122,8 +122,8 @@ const DEFAULT_CONFIG = {
   phone: { facingMode: 'environment', width: 1280, height: 720, frameRate: 30, maxBitrate: 4000000, audio: false }
 }
 
-// Miền giá trị hợp lệ cho từng filter. Tách ra thành bảng để control.html và
-// server không lệch nhau — client đọc luôn bảng này qua /api/config-schema.
+// Miền giá trị hợp lệ cho từng filter. Tách ra thành bảng để panel hiệu ứng trên
+// viewer và server không lệch nhau — client đọc luôn bảng này qua /api/filter-ranges.
 const FILTER_RANGES = {
   brightness: [0.5, 1.5],
   contrast: [0.5, 1.5],
@@ -137,8 +137,8 @@ const FILTER_RANGES = {
 const VALID_ROTATIONS = new Set([0, 90, 180, 270])
 
 // Nhận số nguyên trong dải cho phép, ngược lại giữ nguyên giá trị đang dùng.
-// Cố tình KHÔNG clamp: width 0 (ô input bị xoá trắng ở control.html) là dữ liệu
-// hỏng chứ không phải "hơi nhỏ" — clamp lên 160 vẫn là ghi đè rác lên giá trị tốt.
+// Cố tình KHÔNG clamp: width 0 (ô input bị xoá trắng trong panel config) là dữ
+// liệu hỏng chứ không phải "hơi nhỏ" — clamp lên 160 vẫn là ghi đè rác lên giá trị tốt.
 function intInRange(value, min, max, fallback) {
   const n = Number(value)
   if (!Number.isInteger(n) || n < min || n > max) return fallback
@@ -233,8 +233,8 @@ app.get('/api/config', (req, res) => {
   res.json(configCache)
 })
 
-// control.html dựng slider từ đây thay vì hardcode min/max — một nguồn duy nhất
-// cho miền giá trị, khỏi lệch với validate phía server
+// Panel hiệu ứng trên viewer dựng slider từ đây thay vì hardcode min/max — một
+// nguồn duy nhất cho miền giá trị, khỏi lệch với validate phía server
 app.get('/api/filter-ranges', (req, res) => {
   res.json(FILTER_RANGES)
 })
@@ -258,7 +258,7 @@ app.get('/api/urls', async (req, res) => {
   const ip = ips.some(i => i.address === requested) ? requested : getLocalIP()
 
   // USB đi qua localhost → miễn token. WiFi từ LAN → phải mang token lần đầu,
-  // sau đó cookie lo phần còn lại (kể cả khi phone tự mở control.html)
+  // sau đó cookie lo phần còn lại (mọi request tiếp theo từ máy đó)
   const usbURL = `http://localhost:${HTTP_PORT}/phone.html`
   const wifiURL = `https://${ip}:${HTTPS_PORT}/phone.html?t=${TOKEN}`
 
@@ -429,7 +429,7 @@ try {
     console.log('\nQR WiFi (phone không dây):')
     console.log(qr)
     console.log(`URL WiFi (kèm token): ${wifiURL}`)
-    console.log(`Mở control trên thiết bị LAN khác: https://${ip}:${HTTPS_PORT}/control.html?t=${TOKEN}`)
+    console.log(`Xem trên thiết bị LAN khác: https://${ip}:${HTTPS_PORT}/viewer.html?t=${TOKEN}`)
 
     // Máy nhiều card mạng thì IP đoán tự động có thể sai — in hết để còn đối chiếu
     const ips = listLocalIPs()

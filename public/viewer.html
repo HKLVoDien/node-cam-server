@@ -91,8 +91,8 @@
 
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
-  /* Panel hiệu ứng — chỉnh ngay trên viewer để nhìn kết quả cùng lúc, khỏi
-     phải mở control.html ở tab khác */
+  /* Panel hiệu ứng — chỉnh ngay trên viewer để vừa kéo slider vừa nhìn kết quả,
+     thay vì phải nhảy sang một trang cấu hình riêng */
   #fxPanel {
     display: none;
     position: fixed;
@@ -179,7 +179,6 @@
   <button class="ctrl-btn" id="fitBtn" title="Lấp đầy màn hình (cắt rìa) ↔ vừa khung (thấy toàn bộ)">⛶ Lấp đầy</button>
   <button class="ctrl-btn" id="fxBtn" title="Hiệu ứng màu sắc, làm mịn, phóng to">🎨 Hiệu ứng</button>
   <div class="ctrl-divider"></div>
-  <a class="ctrl-btn" href="/control.html" target="_blank" title="Cấu hình camera (độ phân giải, bitrate, mic)">🎛️</a>
   <button class="hide-btn" id="hideBtn" title="Ẩn controls (double-click để hiện lại)">✕</button>
 </div>
 
@@ -262,7 +261,7 @@ function loadFilters(cfg) {
   applyFilter()
   applyFit()
   applyTransform()   // zoom nằm trong filters nên transform phải chạy lại
-  refreshFxUI()      // config đổi từ control.html → slider trong panel bám theo
+  refreshFxUI()      // config đổi từ phone → slider trong panel bám theo
 }
 
 function setStatus(text, state = '') {
@@ -271,8 +270,8 @@ function setStatus(text, state = '') {
   statusEl.className = state
 }
 
-// Lưu xong phải báo cho control.html/phone, nếu không UI của chúng vẫn hiện giá
-// trị cũ cho tới khi người dùng tự F5
+// Lưu xong phải báo cho phone, nếu không panel config bên đó vẫn hiện giá trị cũ
+// cho tới khi người dùng tự F5
 function pushConfig(patch) {
   saveConfig(patch)
     .then(() => socket.emit(EV.CONFIG_UPDATED))
@@ -307,7 +306,7 @@ fitBtn.addEventListener('click', () => {
 
 // ── Panel hiệu ứng ──────────────────────────────────────────────────────────
 // Áp filter ngay tại chỗ rồi mới lưu, nên kéo slider là thấy đổi tức thì —
-// không chờ round-trip qua server như khi chỉnh từ control.html
+// không phải chờ một vòng qua server rồi mới thấy hình đổi
 const fxPanel = document.getElementById('fxPanel')
 const fxSliders = document.getElementById('fxSliders')
 

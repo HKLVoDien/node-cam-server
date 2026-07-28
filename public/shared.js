@@ -12,7 +12,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   const ROOM = 'facecam'
 
-  const ROLE = { PHONE: 'phone', VIEWER: 'viewer', CONTROL: 'control' }
+  const ROLE = { PHONE: 'phone', VIEWER: 'viewer' }
 
   const EV = {
     JOIN: 'join',
@@ -32,8 +32,9 @@
 
   const RTC_CONFIG = { iceServers: [] }
 
-  // Nhãn + preset dùng chung cho panel trên viewer và bảng control — hai nơi cùng
-  // dựng UI cho một bộ filter, tách ra thì sớm muộn cũng lệch nhau
+  // Nhãn + preset cho panel hiệu ứng trên viewer. Để ở đây thay vì nhúng thẳng
+  // vào viewer.html vì miền giá trị tương ứng do server phát ra — hai nửa của
+  // cùng một định nghĩa thì nên nằm cạnh nhau
   const FILTER_LABELS = {
     brightness: 'Độ sáng',
     contrast: 'Tương phản',

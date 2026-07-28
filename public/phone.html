@@ -846,7 +846,7 @@ socket.on(EV.VIEWER_REQUEST, async ({ from }) => {
 // cứ tích lại cho tới khi đóng trang phone
 socket.on(EV.VIEWER_LEFT, ({ id }) => closePeer(id))
 
-// Config đổi từ control.html / viewer → nạp lại để lần bật camera kế tiếp dùng giá trị mới
+// Config đổi từ viewer → nạp lại để lần bật camera kế tiếp dùng giá trị mới
 socket.on(EV.CONFIG_UPDATED, async () => {
   const c = await fetchConfig()
   loadCfgToUI(c)
