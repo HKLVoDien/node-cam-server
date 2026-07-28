@@ -1,0 +1,38 @@
+# Mission: Chạy test trên mỗi push/PR để người lạ clone về biết repo còn lành.
+# Author: DienJVo
+# Version: 1.0.0
+
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Không dừng cả matrix khi một OS đỏ — cần biết lỗi chỉ ở Windows hay ở mọi nơi
+      fail-fast: false
+      matrix:
+        # Windows nằm trong matrix vì đây là nền tảng chính của project, và nó
+        # khác Linux đúng ở những chỗ dễ vỡ: đường dẫn, quyền file, cách kill process
+        os: [ubuntu-latest, windows-latest]
+        # Từ 22 trở lên: test dùng WebSocket global, mà nó chỉ ổn định từ Node 22.
+        # Server thì chạy được từ Node 18 (xem "engines" trong package.json) —
+        # đây là yêu cầu của bộ test, không phải của sản phẩm.
+        node: [22, 24]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # npm ci cần package-lock.json và cài đúng phiên bản đã khoá, khác npm install
+      - run: npm ci
+
+      - run: npm test

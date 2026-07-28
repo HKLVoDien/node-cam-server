@@ -6,44 +6,22 @@ const fsp = require('fs/promises')
 const path = require('path')
 const express = require('express')
 const { Server } = require('socket.io')
-const os = require('os')
 const QRCode = require('qrcode')
 // Dùng chung với client để tên event chỉ có một nguồn duy nhất
 const { ROLE, EV } = require('./public/shared.js')
 const { ensureCert } = require('./certs.js')
+const { listLocalIPs, getLocalIP } = require('./network.js')
 
 const app = express()
 
 const HTTP_PORT = Number(process.env.PORT) || 7070
 const HTTPS_PORT = Number(process.env.HTTPS_PORT) || 7443
 
-// Card ảo (Docker, WSL, VirtualBox, VMware, Hyper-V, VPN) cũng là IPv4 non-internal,
-// nên kiểu "lấy cái đầu tiên" hay trả về IP mà phone không hề kết nối tới được —
-// QR WiFi in ra sẽ vô dụng mà nhìn thì không biết vì sao.
-const VIRTUAL_IFACE = /virtual|vmware|virtualbox|vethernet|hyper-?v|docker|tailscale|zerotier|tap-|tun\d|loopback/i
-
-function rankInterface(name) {
-  if (/wi-?fi|wlan|wireless/i.test(name)) return 2
-  if (/ethernet|^eth\d|^en\d/i.test(name)) return 1
-  return 0
-}
-
-// Trả về mọi IPv4 LAN, card thật xếp trước card ảo, Wi-Fi/Ethernet lên đầu
-function listLocalIPs() {
-  const found = []
-  for (const [name, addrs] of Object.entries(os.networkInterfaces())) {
-    for (const iface of addrs || []) {
-      if (iface.family !== 'IPv4' || iface.internal) continue
-      if (iface.address.startsWith('169.254.')) continue   // APIPA — chưa lấy được DHCP
-      found.push({ name, address: iface.address, virtual: VIRTUAL_IFACE.test(name) })
-    }
-  }
-  return found.sort((a, b) => (a.virtual - b.virtual) || (rankInterface(b.name) - rankInterface(a.name)))
-}
-
-function getLocalIP() {
-  return listLocalIPs()[0]?.address ?? 'localhost'
-}
+// Nơi chứa dữ liệu chạy (config, token, cert) — tách khỏi nơi chứa code. Test cần
+// trỏ sang thư mục tạm để không ghi đè config/token/cert thật của người dùng, và
+// bản đóng gói exe sau này cũng phải ghi vào thư mục dữ liệu riêng chứ không phải
+// cạnh file thực thi.
+const DATA_DIR = process.env.FACECAM_DATA_DIR || __dirname
 
 // ── Xác thực ────────────────────────────────────────────────────────────────
 // Cả hai server listen trên 0.0.0.0 nên không có lớp này thì bất kỳ ai cùng LAN
@@ -52,7 +30,7 @@ function getLocalIP() {
 //
 // Token lưu ra file để giữ nguyên qua các lần restart — nếu sinh mới mỗi lần chạy
 // thì URL trong OBS Browser Source sẽ hỏng sau mỗi lần khởi động lại server.
-const TOKEN_PATH = path.join(__dirname, '.token')
+const TOKEN_PATH = path.join(DATA_DIR, '.token')
 let TOKEN
 try {
   TOKEN = fs.readFileSync(TOKEN_PATH, 'utf8').trim()
@@ -154,7 +132,7 @@ function guardSocket(io) {
 app.use(express.static(path.join(__dirname, 'public')))
 app.use(express.json())
 
-const CONFIG_PATH = path.join(__dirname, 'config.json')
+const CONFIG_PATH = path.join(DATA_DIR, 'config.json')
 const DEFAULT_CONFIG = {
   flipH: false, flipV: false, rotation: 0, hideControls: false,
   // 'cover' lấp đầy màn hình nhưng cắt rìa (hợp với OBS), 'contain' thấy toàn bộ
@@ -485,8 +463,8 @@ try {
   // Trước đây cert sinh một lần rồi thôi nên đổi mạng là cảnh báo nặng thêm mà
   // không có gì báo cho biết. Giờ kiểm mỗi lần khởi động và ký lại khi cần.
   const { key, cert, regenerated, reason } = ensureCert(
-    path.join(__dirname, 'cert.pem'),
-    path.join(__dirname, 'key.pem'),
+    path.join(DATA_DIR, 'cert.pem'),
+    path.join(DATA_DIR, 'key.pem'),
     listLocalIPs().map(i => i.address),
   )
   if (regenerated) console.log(`[CERT] Đã tạo cert mới — ${reason}`)
