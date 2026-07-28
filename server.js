@@ -10,6 +10,7 @@ const os = require('os')
 const QRCode = require('qrcode')
 // Dùng chung với client để tên event chỉ có một nguồn duy nhất
 const { ROLE, EV } = require('./public/shared.js')
+const { ensureCert } = require('./certs.js')
 
 const app = express()
 
@@ -480,10 +481,17 @@ httpServer.listen(HTTP_PORT, '0.0.0.0', async () => {
 // HTTPS server (WiFi mode)
 let httpsServerRef = null
 try {
-  const httpsServer = https.createServer({
-    key: fs.readFileSync(path.join(__dirname, 'key.pem')),
-    cert: fs.readFileSync(path.join(__dirname, 'cert.pem')),
-  }, app)
+  // Cert gắn với IP, mà IP LAN đổi liên tục: DHCP cấp lại, đổi mạng, cắm thêm dây.
+  // Trước đây cert sinh một lần rồi thôi nên đổi mạng là cảnh báo nặng thêm mà
+  // không có gì báo cho biết. Giờ kiểm mỗi lần khởi động và ký lại khi cần.
+  const { key, cert, regenerated, reason } = ensureCert(
+    path.join(__dirname, 'cert.pem'),
+    path.join(__dirname, 'key.pem'),
+    listLocalIPs().map(i => i.address),
+  )
+  if (regenerated) console.log(`[CERT] Đã tạo cert mới — ${reason}`)
+
+  const httpsServer = https.createServer({ key, cert }, app)
   httpsServerRef = httpsServer
   httpsIO = new Server(httpsServer)
   guardSocket(httpsIO)
@@ -516,10 +524,11 @@ try {
     console.log('')
   })
 } catch (err) {
-  // Thiếu cert là trường hợp bình thường (chỉ dùng USB mode) nhưng lỗi khác —
-  // key hỏng, sai quyền đọc — thì phải nói rõ, không nuốt chung một rọ
-  if (err.code === 'ENOENT') console.log('[HTTPS] Bỏ qua — không tìm thấy cert.pem/key.pem')
-  else console.error('[HTTPS] Không khởi tạo được:', err.message)
+  // Cert giờ được sinh tự động nên thiếu file không còn là lý do nữa — tới đây
+  // nghĩa là sinh hoặc ghi thất bại thật (thư mục chỉ đọc, đĩa đầy, key hỏng).
+  // USB mode qua HTTP vẫn chạy được nên không thoát, chỉ mất WiFi mode.
+  console.error('[HTTPS] Không khởi tạo được:', err.message)
+  console.error('[HTTPS] Bỏ qua WiFi mode — USB mode qua HTTP vẫn hoạt động.\n')
   setupSignaling(httpIO, null, 'HTTP')
 }
 

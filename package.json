@@ -8,7 +8,11 @@
     "dev": "node --watch server.js",
     "init": "node init.js"
   },
-  "keywords": ["webcam", "webrtc", "facecam"],
+  "keywords": [
+    "webcam",
+    "webrtc",
+    "facecam"
+  ],
   "author": "DienJVo",
   "license": "ISC",
   "engines": {
@@ -16,6 +20,7 @@
   },
   "dependencies": {
     "express": "^5.2.1",
+    "node-forge": "^1.4.0",
     "qrcode": "^1.5.4",
     "socket.io": "^4.8.3"
   }
