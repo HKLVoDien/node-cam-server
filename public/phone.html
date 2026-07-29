@@ -223,7 +223,11 @@
      chạy thật. Không có nó thì "mic không ra tiếng" là lỗi mù hoàn toàn: track
      vẫn được tạo, vẫn 'live', chỉ nội dung là im lặng, và phải soi tận phía
      viewer mới biết */
-  .cfg-row-stack { flex-direction: column; align-items: stretch; gap: 0; }
+  /* Phải viết kèm .cfg-row: quy tắc .cfg-row nằm phía dưới trong file và cùng
+     specificity, nên `align-items: center` của nó thắng. Hậu quả là các con không
+     giãn hết chiều ngang mà co lại rồi nằm giữa hàng — thanh mức mic (flex: 1)
+     teo về gần 0 và trông như không có. */
+  .cfg-row.cfg-row-stack { flex-direction: column; align-items: stretch; gap: 0; }
   .cfg-row-main {
     display: flex;
     align-items: center;
@@ -369,6 +373,33 @@
     gap: 8px;
   }
   .save-btn:active { opacity: 0.85; }
+
+  /* Ẩn toàn bộ lớp phủ để chỉ còn khung hình. Gom vào một class trên body thay vì
+     sửa display từng thẻ: #zoomBar vốn đã tự ẩn khi camera không có zoom, đụng
+     vào display của nó là hiện nhầm một thanh vô dụng lúc bỏ ẩn. */
+  body.overlay-hidden #statusWrap,
+  body.overlay-hidden #camBar,
+  body.overlay-hidden #zoomBar,
+  body.overlay-hidden #quickBar { display: none !important; }
+
+  /* Nhắc cách quay lại. Không có nó thì ẩn xong là người dùng mắc kẹt với một
+     màn hình trống không nút nào. */
+  #overlayHint {
+    position: fixed;
+    bottom: 40px; left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,0.82);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: #fff;
+    padding: 10px 18px;
+    border-radius: 20px;
+    font-size: 13px;
+    z-index: 30;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  #overlayHint.show { opacity: 1; }
 </style>
 </head>
 <body>
@@ -423,11 +454,17 @@
     <div class="icon">↻</div>
     <span id="rotLabel">0°</span>
   </button>
+  <button class="qbtn" id="qHide">
+    <div class="icon">🙈</div>
+    <span data-i18n="phone.hideOverlay">Ẩn</span>
+  </button>
   <button class="qbtn" id="qSettings">
     <div class="icon">⚙️</div>
     <span data-i18n="phone.settings">Cài đặt</span>
   </button>
 </div>
+
+<div id="overlayHint" data-i18n="phone.overlayHint">Chạm đúp để hiện lại</div>
 
 <!-- Settings Panel -->
 <div id="settingsPanel">
@@ -721,6 +758,10 @@ function loadCfgToUI(c) {
   document.getElementById('cfg-flipV').value = String(c.flipV ?? false)
   document.getElementById('cfg-rotation').value = String(c.rotation ?? 0)
   document.getElementById('cfg-hideControls').value = String(c.hideControls ?? false)
+  // Tính lại sau khi MỌI ô đã có giá trị. refreshResolutionUI() ở trên cũng gọi
+  // hàm này, nhưng lúc đó fps và bitrate còn nguyên giá trị mặc định của HTML —
+  // cảnh báo sinh ra từ đó nói sai cả fps lẫn bitrate so với thứ đang hiển thị.
+  updateBitrateHint()
 }
 
 fetchConfig().then(c => {
@@ -860,6 +901,10 @@ async function tuneVideoSender(pc) {
   try { await sender.setParameters(params) } catch (e) { console.warn('tuneVideoSender failed', e) }
 }
 
+// Trang này chạy được cả trên máy tính (dùng webcam rời), nhưng mẹo ưu tiên codec
+// bên dưới chỉ đúng cho thiết bị di động — xem giải thích trong preferHardwareCodec.
+const laDiDong = navigator.userAgentData?.mobile ?? /android|iphone|ipad|ipod/i.test(navigator.userAgent)
+
 // Encode video là thứ sinh nhiệt và ngốn pin nhất trên điện thoại. Khoảng cách
 // giữa encoder phần cứng và phần mềm là vài lần, không phải vài phần trăm.
 //
@@ -867,7 +912,12 @@ async function tuneVideoSender(pc) {
 // H.264, nhưng nhiều máy Android KHÔNG có mạch encode VP8 — lúc đó Chrome rơi về
 // libvpx chạy trên CPU: máy nóng rất nhanh, rồi bị hạ xung và fps tụt theo.
 // Đẩy H.264 lên đầu danh sách để hai bên thương lượng ra nó trước.
+//
+// Chỉ làm trên thiết bị di động. Chrome trên máy tính không dùng mạch H.264 cho
+// WebRTC, nên ép H.264 ở đó chỉ đổi từ libvpx sang OpenH264 — vẫn chạy CPU, mà
+// chất lượng ở cùng bitrate còn kém hơn. Đúng nghĩa lỗ cả hai đầu.
 function preferHardwareCodec(pc) {
+  if (!laDiDong) return
   const cap = RTCRtpSender.getCapabilities?.('video')
   const tr = pc.getTransceivers().find(t => t.sender?.track?.kind === 'video')
   if (!cap || !tr?.setCodecPreferences) return
@@ -875,6 +925,21 @@ function preferHardwareCodec(pc) {
   const isH264 = c => /h264/i.test(c.mimeType)
   const h264 = cap.codecs.filter(isH264)
   if (!h264.length) return   // máy không có H.264 → giữ nguyên mặc định
+
+  // Chọn được H.264 vẫn chưa đủ: không phải biến thể nào cũng chạy trên mạch phần
+  // cứng. Encoder phần cứng của điện thoại gần như chỉ nhận Constrained Baseline
+  // (profile-level-id bắt đầu bằng 42) kèm packetization-mode=1. Để một biến thể
+  // High profile đứng đầu thì Chrome lặng lẽ rơi về OpenH264 chạy trên CPU — vẫn
+  // là H.264, nhưng nóng máy y hệt VP8 phần mềm.
+  // 42e0.. = Constrained Baseline, biến thể mà mạch phần cứng nhận rộng rãi nhất.
+  // 42.... = Baseline thường, thường vẫn chạy được. Còn lại (4d = Main, 64 = High)
+  // hay chỉ có bản phần mềm.
+  const diemUuTien = (c) => {
+    const f = (c.sdpFmtpLine ?? '').toLowerCase()
+    const profile = /profile-level-id=42e0/.test(f) ? 4 : /profile-level-id=42/.test(f) ? 2 : 0
+    return profile + (/packetization-mode=1/.test(f) ? 1 : 0)
+  }
+  h264.sort((a, b) => diemUuTien(b) - diemUuTien(a))
 
   try {
     // Giữ lại toàn bộ codec còn lại làm phương án dự phòng, chỉ đổi thứ tự ưu tiên
@@ -897,13 +962,22 @@ async function reportEncoder(pc) {
     stats.forEach(s => {
       if (s.type !== 'outbound-rtp' || s.kind !== 'video') return
       const impl = s.encoderImplementation ?? '(chưa rõ)'
-      const codec = stats.get(s.codecId)?.mimeType ?? '?'
-      // Tên các encoder chạy trên CPU. Máy nóng bất thường gần như luôn là do
-      // rơi vào nhóm này.
+      const codecStat = stats.get(s.codecId)
+      // Kèm luôn fmtp: khi encoder chạy trên CPU thì profile chính là manh mối
+      // đầu tiên cần nhìn, không có nó chỉ biết "software" mà không biết vì sao
+      const codec = (codecStat?.mimeType ?? '?') +
+        (codecStat?.sdpFmtpLine ? ` [${codecStat.sdpFmtpLine}]` : '')
+      // Tên các encoder chạy trên CPU. Trên điện thoại, rơi vào nhóm này gần như
+      // luôn là lý do máy nóng bất thường — nhưng trên máy tính thì đó là chuyện
+      // bình thường: Chrome desktop vốn không dùng mạch encode cho WebRTC, nên
+      // cảnh báo ở đó chỉ là báo động giả.
       const onCPU = /libvpx|openh264|libaom|ffmpeg/i.test(impl)
-      console[onCPU ? 'warn' : 'log'](
-        `[ENC] ${codec} · ${impl}` +
-        (onCPU ? ' — đang encode bằng CPU, máy sẽ nóng và hao pin' : ' — encoder phần cứng')
+      const dangLo = onCPU && laDiDong
+      console[dangLo ? 'warn' : 'log'](
+        `[ENC] ${codec} · ${impl} — ` +
+        (!onCPU ? 'encoder phần cứng'
+          : dangLo ? 'đang encode bằng CPU, máy sẽ nóng và hao pin'
+          : 'encode bằng CPU (bình thường trên máy tính)')
       )
     })
   } catch (e) {
@@ -1111,16 +1185,28 @@ function showActualResolution() {
 
   actualResEl.hidden = false
 
-  // Chỉ cảnh báo khi hướng bị đảo so với lựa chọn — kích thước lệch chút ít là
-  // chuyện bình thường (camera chọn mode gần nhất nó có)
   const muonNgang = phoneCfg.width >= phoneCfg.height
   const thucTeNgang = width >= height
   const daoHuong = muonNgang !== thucTeNgang
 
-  actualResEl.classList.toggle('warn', daoHuong)
-  actualResEl.innerHTML = daoHuong
-    ? `${t('cfg.actualRes')} <b>${width}×${height}</b> — ${t('cfg.rotated')}`
-    : `${t('cfg.actualRes')} <b>${width}×${height}</b>`
+  // So theo cạnh dài / cạnh ngắn để chuyện xoay không bị tính nhầm thành "không
+  // hỗ trợ". `width: { ideal }` chỉ là mong muốn — camera nào không có đúng mức
+  // đó sẽ lặng lẽ trả về mức gần nhất, và trước đây màn hình chẳng nói gì nên
+  // người dùng tưởng cấu hình không ăn.
+  const canhDai = (a, b) => [Math.max(a, b), Math.min(a, b)]
+  const [muonDai, muonNgan] = canhDai(phoneCfg.width, phoneCfg.height)
+  const [thucDai, thucNgan] = canhDai(width, height)
+  const khongDungMuc = thucDai !== muonDai || thucNgan !== muonNgan
+
+  let ghiChu = ''
+  if (daoHuong) ghiChu = ' — ' + t('cfg.rotated')
+  else if (khongDungMuc) ghiChu = ' — ' + t('cfg.resFallback', { want: `${muonDai}×${muonNgan}` })
+
+  // Cầm dọc là cách cầm mặc định, nên khung dọc không phải lỗi của ai — tô vàng
+  // ngay khi vừa bật camera thành ra trách người dùng vì chuyện bình thường.
+  // Chỉ camera không có mức đã chọn mới đáng gọi là bất thường.
+  actualResEl.classList.toggle('warn', !daoHuong && khongDungMuc)
+  actualResEl.innerHTML = `${t('cfg.actualRes')} <b>${width}×${height}</b>${ghiChu}`
 }
 
 // ── Mức mic ─────────────────────────────────────────────────────────────────
@@ -1164,12 +1250,25 @@ function startMicMeter(stream) {
   micAnalyser = micCtx.createAnalyser()
   micAnalyser.fftSize = 512
   micCtx.createMediaStreamSource(new MediaStream([track])).connect(micAnalyser)
+  resumeAudioCtx()
 
   if (settingsPanel.classList.contains('open')) resumeMicLoop()
 }
 
+// AudioContext sinh ra ở trạng thái `suspended` khi chuỗi gọi đã rời khỏi user
+// gesture — getUserMedia có await ở giữa nên trên điện thoại gần như luôn rơi vào
+// cảnh này. Suspended thì analyser chỉ trả về mẫu 0: thanh đo đứng im và còn báo
+// "im lặng" oan, trong khi mic vẫn gửi tiếng đi hoàn toàn bình thường.
+//
+// Gọi lại lần nữa lúc mở panel là đủ để cứu: cú chạm đó chính là gesture.
+function resumeAudioCtx() {
+  if (micCtx?.state !== 'suspended') return
+  micCtx.resume().catch(e => console.warn('Không resume được AudioContext:', e.name))
+}
+
 function resumeMicLoop() {
   if (!micAnalyser || micMeterRunning()) return
+  resumeAudioCtx()   // lần này chắc ăn: mở panel là một cú chạm thật
   const buf = new Float32Array(micAnalyser.fftSize)
   micSilentSince = performance.now()
 
@@ -1289,6 +1388,25 @@ document.getElementById('qSettings').addEventListener('click', () => {
   settingsPanel.classList.add('open')
   resumeMicLoop()
 })
+
+// ── Ẩn lớp phủ trên chính điện thoại ────────────────────────────────────────
+// Tách hẳn khỏi công tắc "ẩn thanh trên viewer PC": đây là chuyện hiển thị của
+// riêng máy này, không đẩy lên config chung nên không kéo theo ai.
+const overlayHint = document.getElementById('overlayHint')
+let hintTimer = null
+
+function setOverlayHidden(v) {
+  document.body.classList.toggle('overlay-hidden', v)
+  clearTimeout(hintTimer)
+  if (!v) { overlayHint.classList.remove('show'); return }
+  // Nhắc lối ra ngay lúc ẩn, rồi tự rút đi để không nằm lại trong khung hình
+  overlayHint.classList.add('show')
+  hintTimer = setTimeout(() => overlayHint.classList.remove('show'), 2600)
+}
+
+document.getElementById('qHide').addEventListener('click', () => setOverlayHidden(true))
+// Cố ý không nhớ qua F5: ẩn xong mà tải lại trang vẫn thấy giao diện, đỡ hoảng
+document.addEventListener('dblclick', () => setOverlayHidden(false))
 
 // ── Ngôn ngữ ────────────────────────────────────────────────────────────────
 const langSelect = document.getElementById('langSelect')

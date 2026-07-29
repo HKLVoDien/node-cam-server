@@ -40,7 +40,12 @@
     border: 1px solid rgba(255,255,255,0.08);
     padding: 8px 12px;
     border-radius: 20px;
+    transition: opacity 0.25s;
   }
+  /* Tự mờ đi khi con chuột nằm im một lúc. Đây cũng là cách thanh này biến mất
+     hoàn toàn khỏi OBS: Browser Source không có con chuột nào để cử động, nên nó
+     ở trạng thái idle từ khung hình đầu tiên và không bao giờ lọt vào cảnh quay. */
+  #controls.idle { opacity: 0; pointer-events: none; }
 
   .ctrl-btn {
     display: flex;
@@ -132,6 +137,12 @@
     color: #bbb; padding: 5px 10px; border-radius: 8px; cursor: pointer; font-size: 12px;
   }
   .fx-presets button:hover { background: rgba(255,255,255,0.15); color: #fff; }
+  /* Cùng màu với .ctrl-btn.active để "đang bật" trông giống nhau ở mọi chỗ */
+  .fx-presets button.active {
+    background: #3b82f6;
+    border-color: #3b82f6;
+    color: #fff;
+  }
 
   .fx-row { margin-bottom: 11px; }
   .fx-row-top {
@@ -324,13 +335,49 @@ function pushConfig(patch) {
 
 const controls = document.getElementById('controls')
 
+// Ẩn/hiện thanh là lựa chọn của riêng máy này, không phải thiết lập dùng chung.
+// Trước đây nó ghi thẳng vào config trên server nên một người bấm ẩn là mọi viewer
+// khác lẫn panel trên phone đều bị kéo theo.
+const HIDE_KEY = 'facecam.hideControls'
+const daLuuCucBo = localStorage.getItem(HIDE_KEY)
+let hidden = daLuuCucBo === '1'
+// Giá trị lần trước nhận từ phone — cần để phân biệt "phone vừa ra lệnh" với
+// "phone lưu thứ khác và gửi kèm cả trường này"
+let lenhAnTruocDo = null
+
+function setHidden(v, ghiNho = true) {
+  hidden = v
+  if (ghiNho) {
+    try { localStorage.setItem(HIDE_KEY, v ? '1' : '0') }
+    catch (e) { console.warn('Không lưu được lựa chọn ẩn thanh:', e.name) }
+  }
+  controls.style.display = v ? 'none' : ''
+  // Panel phải đóng theo, không thì nó nằm lại trên khung hình mà không còn nút
+  // nào để tắt — và OBS sẽ thu luôn cả panel
+  if (v) fxPanel.classList.remove('open')
+  else wakeControls()
+}
+
+// Phone đổi công tắc này là một lệnh từ xa, dùng khi viewer nằm trong OBS và
+// không tiện bấm. Chỉ áp khi giá trị thật sự đổi — nếu không, mỗi lần phone lưu
+// bất kỳ thứ gì cũng sẽ giẫm lên lựa chọn tại chỗ của người đang xem.
+function applyRemoteHide(v) {
+  const val = !!v
+  if (val === lenhAnTruocDo) return
+  lenhAnTruocDo = val
+  setHidden(val)
+}
+
 fetchConfig().then(cfg => {
   fH = cfg.flipH ?? false
   fV = cfg.flipV ?? false
   rot = cfg.rotation ?? 0
   document.getElementById('flipH').classList.toggle('active', fH)
   document.getElementById('flipV').classList.toggle('active', fV)
-  if (cfg.hideControls) controls.style.display = 'none'
+  lenhAnTruocDo = !!cfg.hideControls
+  // Máy này chưa từng tự chọn thì mới nghe theo config; đã chọn rồi thì giữ
+  if (daLuuCucBo === null) setHidden(!!cfg.hideControls, false)
+  else setHidden(hidden, false)
   loadFilters(cfg)
 }).catch(e => console.warn('Không tải được config:', e.message))
 
@@ -383,6 +430,7 @@ function buildFxPanel(ranges) {
       applyFilter()
       if (key === 'zoom') applyTransform()
       document.getElementById(`fxval-${key}`).textContent = formatFilterValue(key, filters[key])
+      refreshPresetActive()
       queueFilterSave()
     })
   }
@@ -393,6 +441,7 @@ function buildFxPanel(ranges) {
     const btn = document.createElement('button')
     // Khoá preset là định danh tiếng Anh, tên hiển thị tra qua i18n
     btn.dataset.i18n = `preset.${id}`
+    btn.dataset.preset = id
     btn.addEventListener('click', () => {
       filters = { ...filters, ...FILTER_PRESETS[id] }
       applyFilter(); applyTransform(); refreshFxUI()
@@ -404,12 +453,31 @@ function buildFxPanel(ranges) {
   refreshFxUI()
 }
 
+// Preset cố tình không khai báo `zoom` (trừ 'none'), nên chỉ đối chiếu những khoá
+// nó thật sự đặt — so cả zoom thì canh khung xong là mọi preset đều trông như
+// chưa từng được chọn. So bằng epsilon vì đây toàn số thực.
+function dangDungPreset(id) {
+  const p = FILTER_PRESETS[id]
+  return Object.keys(p).every(k => Math.abs((filters[k] ?? 0) - p[k]) < 1e-6)
+}
+
 function refreshFxUI() {
   for (const key of FILTER_KEYS) {
     const input = document.getElementById(`fx-${key}`)
     const val = document.getElementById(`fxval-${key}`)
     if (input && filters[key] !== undefined) input.value = filters[key]
     if (val && filters[key] !== undefined) val.textContent = formatFilterValue(key, filters[key])
+  }
+  refreshPresetActive()
+}
+
+// Tách khỏi refreshFxUI để gọi được trong lúc kéo slider: refreshFxUI ghi lại
+// value của mọi input, chạm vào cái đang kéo là dễ giật.
+// Tự chỉnh tay là lệch khỏi mọi preset — lúc đó không nút nào sáng, đúng thực tế
+// chứ không để một nút sáng gây hiểu nhầm.
+function refreshPresetActive() {
+  for (const btn of document.querySelectorAll('#fxPresets button')) {
+    btn.classList.toggle('active', dangDungPreset(btn.dataset.preset))
   }
 }
 
@@ -442,17 +510,35 @@ applyI18n()
 
 fetch('/api/filter-ranges').then(r => r.json()).then(buildFxPanel)
   .catch(e => console.warn('Không tải được dải filter:', e.message))
-document.getElementById('hideBtn').addEventListener('click', () => {
-  controls.style.display = 'none'
-  // Panel phải đóng theo, không thì nó nằm lại trên khung hình mà không còn
-  // nút nào để tắt — và OBS sẽ thu luôn cả panel
-  fxPanel.classList.remove('open')
-  pushConfig({ hideControls: true })
-})
-document.addEventListener('dblclick', () => {
-  controls.style.display = ''
-  pushConfig({ hideControls: false })
-})
+document.getElementById('hideBtn').addEventListener('click', () => setHidden(true))
+document.addEventListener('dblclick', () => setHidden(false))
+
+// Thanh tự mờ sau vài giây không ai đụng vào. Trong OBS Browser Source không có
+// con chuột nào cử động, nên nó nằm im ở trạng thái idle và không lọt vào cảnh
+// quay — không cần ai nhớ bấm ẩn trước khi lên sóng.
+const IDLE_MS = 2500
+let idleTimer = null
+
+function wakeControls() {
+  if (hidden) return   // đã ẩn hẳn thì tôn trọng, đừng dựng dậy
+  controls.classList.remove('idle')
+  clearTimeout(idleTimer)
+  idleTimer = setTimeout(function nguNeuRanh() {
+    // Panel hiệu ứng đang mở nghĩa là người dùng vẫn đang chỉnh dở — hoãn lại
+    if (fxPanel.classList.contains('open')) {
+      idleTimer = setTimeout(nguNeuRanh, IDLE_MS)
+      return
+    }
+    controls.classList.add('idle')
+  }, IDLE_MS)
+}
+
+// Bắt đầu ở trạng thái idle: OBS sạch ngay từ khung hình đầu, còn người ngồi
+// trước máy chỉ cần khẽ động chuột là thanh hiện ra
+controls.classList.add('idle')
+for (const ev of ['mousemove', 'mousedown', 'touchstart', 'keydown']) {
+  document.addEventListener(ev, wakeControls, { passive: true })
+}
 
 // ── Tiếng từ mic điện thoại ─────────────────────────────────────────────────
 // Trình duyệt chặn autoplay video có tiếng, nên không thể tự bỏ câm khi nhận
@@ -729,15 +815,16 @@ socket.on(EV.CONFIG_UPDATED, () => {
     rot = cfg.rotation ?? 0
     document.getElementById('flipH').classList.toggle('active', fH)
     document.getElementById('flipV').classList.toggle('active', fV)
-    controls.style.display = cfg.hideControls ? 'none' : ''
-    if (cfg.hideControls) fxPanel.classList.remove('open')
+    applyRemoteHide(cfg.hideControls)
     loadFilters(cfg)
   }).catch(e => console.warn('Không tải được config:', e.message))
 })
 
 socket.on(EV.PHONE_DISCONNECTED, () => {
   setStatus('viewer.phoneLost', 'error')
-  controls.style.display = ''
+  // Cố tình KHÔNG dựng thanh điều khiển dậy ở đây. Phone rớt một nhịp giữa buổi
+  // ghi hình là chuyện thường, mà thanh tự nhảy vào giữa cảnh quay thì hỏng cả
+  // đoạn. Muốn thấy lại thì chạm đúp — vẫn luôn có lối ra.
   // Bật lại vòng hỏi stream: trước đây retry đã tự tắt sau lần stream đầu tiên
   // nên phone quay lại cũng không ai yêu cầu offer mới → phải F5 thủ công
   video.srcObject = null
