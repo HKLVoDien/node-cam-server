@@ -54,9 +54,13 @@
     bw:       { brightness: 1.05, contrast: 1.15, saturate: 0, hue: 0, grayscale: 1, sepia: 0, softness: 0 },
   }
 
-  // Độ phân giải dựng sẵn cho dropdown. Chỉ liệt kê chiều ngang vì camera điện
-  // thoại luôn xuất theo chiều sensor (ngang) rồi mới để phần mềm xoay — đặt số
-  // "dọc" không có tác dụng như người dùng tưởng. Ai cần dọc thì dùng Tuỳ chỉnh.
+  // Độ phân giải dựng sẵn cho dropdown, liệt kê theo chiều ngang.
+  //
+  // Hai số này chỉ là gợi ý: khung hình ra dọc hay ngang phụ thuộc người dùng
+  // cầm điện thoại thế nào, vì trình duyệt xoay theo hướng thiết bị. Cầm dọc mà
+  // đặt 1280×720 thì vẫn nhận 720×1280 — không phải lỗi, và cũng không ép được
+  // bằng cách đảo hai số. Muốn khung ngang thì xoay ngang máy, hoặc xoay hình
+  // bằng nút 90° trên viewer.
   const RESOLUTIONS = [
     { w: 640,  h: 480,  label: '640 × 480 (VGA)' },
     { w: 854,  h: 480,  label: '854 × 480 (480p)' },

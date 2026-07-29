@@ -12,6 +12,12 @@
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
+  /* Thuộc tính `hidden` chỉ có tác dụng nhờ `display: none` mặc định của trình
+     duyệt, nên BẤT KỲ rule nào đặt display khác đều thắng nó. Chính vì vậy hai
+     thẻ "Kích thước riêng" và "Bitrate riêng" (class .cfg-row, display: flex)
+     luôn hiện dù JS đã set hidden. Đặt một lần ở đây thay vì vá từng chỗ. */
+  [hidden] { display: none !important; }
+
   body {
     background: #000;
     display: flex;
@@ -38,7 +44,12 @@
     left: 50%;
     transform: translateX(-50%);
     z-index: 20;
+    max-width: calc(100vw - 28px);
+    transition: top 0.2s;
   }
+  /* Khi camera đã bật, thanh chọn camera chiếm nguyên hàng trên cùng — đẩy status
+     xuống dòng dưới, nếu không hai thẻ đè lên nhau trên màn hình hẹp */
+  body.cam-on #statusWrap { top: 58px; }
   #status {
     display: inline-flex;
     align-items: center;
@@ -186,10 +197,74 @@
     border-radius: 14px;
     z-index: 16;
   }
+
+  /* Khi camera đang chạy, mọi thẻ nổi đều nằm đè lên khung hình động — mỗi frame
+     mới buộc GPU blur lại vùng nền bên dưới, 30 lần mỗi giây, trên một chiếc máy
+     đang đồng thời encode video. Đổi sang nền đục: nhìn gần như y hệt vì nền vốn
+     đã tối, mà không phải blur gì cả. Lúc chưa bật cam thì nền tĩnh, blur được
+     cache nên giữ nguyên cho đẹp. */
+  body.cam-on #status,
+  body.cam-on #camSelect,
+  body.cam-on #quickBar,
+  body.cam-on #zoomBar {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  body.cam-on #status,
+  body.cam-on #camSelect { background: rgba(12,12,14,0.88); }
+  body.cam-on #quickBar { background: rgba(10,10,10,0.96); }
+  body.cam-on #zoomBar { background: rgba(12,12,14,0.92); }
   #zoomBar.show { display: flex; }
   #zoomBar .zoom-ico { font-size: 14px; }
   #zoomRange { flex: 1; accent-color: #3b82f6; }
   #zoomLabel { font-size: 12px; color: #aaa; min-width: 38px; text-align: right; }
+
+  /* Mức mic — nằm trong chính thẻ Mic của panel cài đặt, chỉ hiện khi mic đang
+     chạy thật. Không có nó thì "mic không ra tiếng" là lỗi mù hoàn toàn: track
+     vẫn được tạo, vẫn 'live', chỉ nội dung là im lặng, và phải soi tận phía
+     viewer mới biết */
+  .cfg-row-stack { flex-direction: column; align-items: stretch; gap: 0; }
+  .cfg-row-main {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  #micBar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #1e1e24;
+  }
+  #micBar .mic-ico { font-size: 14px; }
+  #micMeter {
+    flex: 1; height: 6px;
+    background: rgba(255,255,255,0.12);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  #micLevel {
+    height: 100%; width: 0%;
+    background: linear-gradient(90deg, #22c55e, #eab308);
+    transition: width 0.08s linear;
+  }
+  #micHint { font-size: 11px; color: #f87171; line-height: 1.4; }
+  #micHint:empty { display: none; }
+
+  /* Kích thước thật camera trả về */
+  #actualRes {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #1e1e24;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #777;
+  }
+  #actualRes b { color: #ddd; font-weight: 600; font-family: ui-monospace, monospace; }
+  #actualRes.warn { color: #fbbf24; }
+  #actualRes.warn b { color: #fbbf24; }
 
   /* Settings panel */
   #settingsPanel {
@@ -272,7 +347,6 @@
     font-size: 12px; line-height: 1.5;
     padding: 10px 14px; border-radius: 12px; margin-top: 4px;
   }
-  .warn-hint[hidden] { display: none; }
 
   .res-inputs { display: flex; align-items: center; gap: 6px; }
   .res-inputs span { color: #666; font-size: 13px; }
@@ -381,12 +455,18 @@
       </select>
     </div>
 
-    <div class="cfg-row">
-      <div>
-        <div class="cfg-row-label" data-i18n="cfg.resolution">Độ phân giải</div>
-        <div class="cfg-row-sub" data-i18n="cfg.resolution.hint">cao hơn thì cần bitrate cao hơn</div>
+    <div class="cfg-row cfg-row-stack">
+      <div class="cfg-row-main">
+        <div>
+          <div class="cfg-row-label" data-i18n="cfg.resolution">Độ phân giải</div>
+          <div class="cfg-row-sub" data-i18n="cfg.resolution.hint">cao hơn thì cần bitrate cao hơn</div>
+        </div>
+        <select id="cfg-resPreset"></select>
       </div>
-      <select id="cfg-resPreset"></select>
+      <!-- Kích thước camera THẬT SỰ trả về. Trình duyệt xoay theo hướng cầm máy
+           nên hai số này hay bị đảo so với lựa chọn — trước đây phải sang tận
+           viewer mới phát hiện. -->
+      <div id="actualRes" hidden></div>
     </div>
 
     <div class="cfg-row" id="cfg-customRes" hidden>
@@ -413,15 +493,23 @@
       </select>
     </div>
 
-    <div class="cfg-row">
-      <div>
-        <div class="cfg-row-label" data-i18n="cfg.mic">Mic</div>
-        <div class="cfg-row-sub" data-i18n="cfg.mic.hint">gửi kèm tiếng từ điện thoại</div>
+    <div class="cfg-row cfg-row-stack">
+      <div class="cfg-row-main">
+        <div>
+          <div class="cfg-row-label" data-i18n="cfg.mic">Mic</div>
+          <div class="cfg-row-sub" data-i18n="cfg.mic.hint">gửi kèm tiếng từ điện thoại</div>
+        </div>
+        <select id="cfg-audio">
+          <option value="false" data-i18n="cfg.off">Tắt</option>
+          <option value="true" data-i18n="cfg.on">Bật</option>
+        </select>
       </div>
-      <select id="cfg-audio">
-        <option value="false" data-i18n="cfg.off">Tắt</option>
-        <option value="true" data-i18n="cfg.on">Bật</option>
-      </select>
+      <!-- Mức mic — chỉ hiện khi mic đang thật sự chạy -->
+      <div id="micBar" hidden>
+        <span class="mic-ico">🎙️</span>
+        <div id="micMeter"><div id="micLevel"></div></div>
+        <span id="micHint"></span>
+      </div>
     </div>
 
     <div class="cfg-row">
@@ -642,7 +730,11 @@ fetchConfig().then(c => {
   document.getElementById('rotLabel').textContent = (c.rotation ?? 0) + '°'
 }).catch(e => setStatus('❌ ' + t('phone.configLoadFailed', { msg: e.message }), 'error'))
 
-document.getElementById('closeSettings').addEventListener('click', () => settingsPanel.classList.remove('open'))
+// Đóng panel thì dừng vòng vẽ mức mic — nó nằm trong panel nên vẽ tiếp chỉ tốn pin
+document.getElementById('closeSettings').addEventListener('click', () => {
+  settingsPanel.classList.remove('open')
+  stopMicLoop()
+})
 
 document.getElementById('saveBtn').addEventListener('click', async () => {
   // Chụp giá trị cũ trước khi loadCfgToUI ghi đè phoneCfg — cần nó để biết thứ gì
@@ -671,6 +763,7 @@ document.getElementById('saveBtn').addEventListener('click', async () => {
   }
   loadCfgToUI(updated)
   settingsPanel.classList.remove('open')
+  stopMicLoop()
   socket.emit(EV.CONFIG_UPDATED)
 
   // Áp dụng ngay thay vì bảo người dùng "bật lại camera" — panel không có nút nào
@@ -684,7 +777,11 @@ document.getElementById('saveBtn').addEventListener('click', async () => {
   try {
     if (localStream && (camChanged || audioChanged)) {
       setStatus(t('phone.applying'))
-      await startStream()
+      // Giữ nguyên camera đang mở khi chỉ đổi độ phân giải/fps. Chỉ bỏ deviceId
+      // khi người dùng thật sự đổi mặt camera — nếu không, đang dùng camera trước
+      // mà sửa độ phân giải là bị nhảy về camera sau.
+      const facingChanged = p.facingMode !== prev.facingMode
+      await startStream(facingChanged ? undefined : currentDeviceId ?? undefined)
       // Thêm/bớt audio track làm đổi cấu trúc SDP — replaceTrack không đủ, phải
       // chào hỏi lại từ đầu với từng viewer
       if (audioChanged) for (const id of [...peers.keys()]) await createPeerFor(id)
@@ -724,8 +821,13 @@ async function getCameras() {
   if (activeId) camSelect.value = activeId
 }
 
+// Camera người dùng chọn đích danh từ dropdown, nếu có. Cần nhớ vì mở lại camera
+// (đổi độ phân giải chẳng hạn) mà chỉ dựa vào facingMode sẽ nhảy về camera khác.
+let currentDeviceId = null
+
 async function startStream(deviceId) {
   if (localStream) localStream.getTracks().forEach(t => t.stop())
+  currentDeviceId = deviceId ?? null
   const video = deviceId
     ? { deviceId: { exact: deviceId }, width: { ideal: phoneCfg.width }, height: { ideal: phoneCfg.height }, frameRate: { ideal: phoneCfg.frameRate } }
     : { facingMode, width: { ideal: phoneCfg.width }, height: { ideal: phoneCfg.height }, frameRate: { ideal: phoneCfg.frameRate } }
@@ -734,6 +836,9 @@ async function startStream(deviceId) {
   preview.srcObject = localStream
   await getCameras()
   await refreshCameraControls()
+  showActualResolution()
+  if (phoneCfg.audio) startMicMeter(localStream)
+  else stopMicMeter()
 
   // Đổi camera giữa chừng: thay track ở mọi viewer đang xem, không dựng lại connection
   const videoTrack = localStream.getVideoTracks()[0]
@@ -755,6 +860,57 @@ async function tuneVideoSender(pc) {
   try { await sender.setParameters(params) } catch (e) { console.warn('tuneVideoSender failed', e) }
 }
 
+// Encode video là thứ sinh nhiệt và ngốn pin nhất trên điện thoại. Khoảng cách
+// giữa encoder phần cứng và phần mềm là vài lần, không phải vài phần trăm.
+//
+// WebRTC mặc định thường chốt VP8. Gần như mọi điện thoại đều có mạch encode
+// H.264, nhưng nhiều máy Android KHÔNG có mạch encode VP8 — lúc đó Chrome rơi về
+// libvpx chạy trên CPU: máy nóng rất nhanh, rồi bị hạ xung và fps tụt theo.
+// Đẩy H.264 lên đầu danh sách để hai bên thương lượng ra nó trước.
+function preferHardwareCodec(pc) {
+  const cap = RTCRtpSender.getCapabilities?.('video')
+  const tr = pc.getTransceivers().find(t => t.sender?.track?.kind === 'video')
+  if (!cap || !tr?.setCodecPreferences) return
+
+  const isH264 = c => /h264/i.test(c.mimeType)
+  const h264 = cap.codecs.filter(isH264)
+  if (!h264.length) return   // máy không có H.264 → giữ nguyên mặc định
+
+  try {
+    // Giữ lại toàn bộ codec còn lại làm phương án dự phòng, chỉ đổi thứ tự ưu tiên
+    tr.setCodecPreferences([...h264, ...cap.codecs.filter(c => !isH264(c))])
+  } catch (e) {
+    // Trình duyệt từ chối danh sách → chạy tiếp với mặc định. Mất tối ưu chứ
+    // không hỏng kết nối, nên không cần dựng lại peer.
+    console.warn('Không đặt được ưu tiên codec:', e.message)
+  }
+}
+
+// Không có API nào hỏi thẳng "đang encode bằng phần cứng hay CPU?" — chỉ getStats
+// mới lộ tên encoder, và phải đợi vài giây sau khi nối xong trường này mới có.
+// Log ra để chẩn đoán được chuyện máy nóng mà không phải mở webrtc-internals.
+async function reportEncoder(pc) {
+  await new Promise(r => setTimeout(r, 3000))
+  if (pc.connectionState !== 'connected') return
+  try {
+    const stats = await pc.getStats()
+    stats.forEach(s => {
+      if (s.type !== 'outbound-rtp' || s.kind !== 'video') return
+      const impl = s.encoderImplementation ?? '(chưa rõ)'
+      const codec = stats.get(s.codecId)?.mimeType ?? '?'
+      // Tên các encoder chạy trên CPU. Máy nóng bất thường gần như luôn là do
+      // rơi vào nhóm này.
+      const onCPU = /libvpx|openh264|libaom|ffmpeg/i.test(impl)
+      console[onCPU ? 'warn' : 'log'](
+        `[ENC] ${codec} · ${impl}` +
+        (onCPU ? ' — đang encode bằng CPU, máy sẽ nóng và hao pin' : ' — encoder phần cứng')
+      )
+    })
+  } catch (e) {
+    console.warn('Không đọc được stats encoder:', e.message)
+  }
+}
+
 function closePeer(viewerId) {
   const entry = peers.get(viewerId)
   if (!entry) return
@@ -766,10 +922,11 @@ function closePeer(viewerId) {
 async function createPeerFor(viewerId) {
   closePeer(viewerId)
   const pc = new RTCPeerConnection(RTC_CONFIG)
-  const entry = { pc, pendingIce: [], iceRestarted: false }
+  const entry = { pc, pendingIce: [], iceRestarted: false, encoderLogged: false }
   peers.set(viewerId, entry)
 
   localStream.getTracks().forEach(t => pc.addTrack(t, localStream))
+  preferHardwareCodec(pc)
   await tuneVideoSender(pc)
 
   pc.onicecandidate = ({ candidate }) => {
@@ -777,6 +934,12 @@ async function createPeerFor(viewerId) {
   }
   pc.onconnectionstatechange = async () => {
     refreshStreamStatus()
+    // 'connected' có thể bắn lại sau mỗi lần đường truyền chập chờn — chỉ báo cáo
+    // encoder ở lần đầu, không thì console ngập log trùng nhau
+    if (pc.connectionState === 'connected' && !entry.encoderLogged) {
+      entry.encoderLogged = true
+      reportEncoder(pc)
+    }
     if (pc.connectionState === 'failed') {
       // Đổi mạng (WiFi ↔ 4G, đổi AP) làm ICE chết mà SDP vẫn dùng lại được →
       // thử restart ICE một lần trước khi bỏ hẳn connection
@@ -785,7 +948,10 @@ async function createPeerFor(viewerId) {
         try {
           const offer = await pc.createOffer({ iceRestart: true })
           await pc.setLocalDescription(offer)
-          socket.emit(EV.OFFER, { to: viewerId, sdp: offer })
+          // Cờ này để viewer biết vẫn là connection cũ, chỉ đổi đường truyền.
+          // Thiếu nó thì viewer không phân biệt được với offer của một peer
+          // connection hoàn toàn mới, vì cả hai đều mang cùng socket id.
+          socket.emit(EV.OFFER, { to: viewerId, sdp: offer, iceRestart: true })
           console.warn('ICE restart cho viewer', viewerId)
           return
         } catch (e) { console.warn('ICE restart thất bại:', e.message) }
@@ -822,6 +988,7 @@ socket.on(EV.PHONE_BUSY, () => {
   btn.innerHTML = '<span>⛔</span> ' + t('phone.busyBtn')
   document.getElementById('startOverlay').style.display = ''
   document.getElementById('camBar').style.display = 'none'
+  document.body.classList.remove('cam-on')
   setStatus(t('phone.busy'), 'error')
 })
 
@@ -852,6 +1019,7 @@ document.getElementById('startBtn').addEventListener('click', async () => {
     await keepAwake()
     document.getElementById('startOverlay').style.display = 'none'
     document.getElementById('camBar').style.display = 'flex'
+    document.body.classList.add('cam-on')
     setStatus(t('phone.waitViewer'))
     // Viewer nào đã mở sẵn và đang chờ sẽ hỏi lại ngay khi nghe event này
     socket.emit(EV.PHONE_READY)
@@ -927,6 +1095,105 @@ function saveViewerCfg(patch) {
   socket.emit(EV.CONFIG_UPDATED)
 }
 
+// ── Kích thước thật camera trả về ───────────────────────────────────────────
+// Trình duyệt xoay khung hình theo hướng cầm máy và chỉ coi width/height là gợi
+// ý, nên chọn 1920×1080 lúc cầm dọc sẽ nhận về 1080×1920. Không ép được bằng
+// constraint, và cũng không nên ép — nhưng phải nói cho người dùng biết ngay tại
+// chỗ, thay vì để họ sang viewer mới thấy con số lạ.
+const actualResEl = document.getElementById('actualRes')
+
+function showActualResolution() {
+  const track = localStream?.getVideoTracks()[0]
+  if (!track) { actualResEl.hidden = true; return }
+
+  const { width, height } = track.getSettings()
+  if (!width || !height) { actualResEl.hidden = true; return }
+
+  actualResEl.hidden = false
+
+  // Chỉ cảnh báo khi hướng bị đảo so với lựa chọn — kích thước lệch chút ít là
+  // chuyện bình thường (camera chọn mode gần nhất nó có)
+  const muonNgang = phoneCfg.width >= phoneCfg.height
+  const thucTeNgang = width >= height
+  const daoHuong = muonNgang !== thucTeNgang
+
+  actualResEl.classList.toggle('warn', daoHuong)
+  actualResEl.innerHTML = daoHuong
+    ? `${t('cfg.actualRes')} <b>${width}×${height}</b> — ${t('cfg.rotated')}`
+    : `${t('cfg.actualRes')} <b>${width}×${height}</b>`
+}
+
+// ── Mức mic ─────────────────────────────────────────────────────────────────
+// Đo ngay tại nguồn trên phone. Mic không thu được gì vẫn cho ra một audio track
+// hợp lệ, 'live', không muted — nhìn từ phía viewer thì mọi thứ trông đúng, chỉ
+// là im lặng. Không có thanh này thì phải mở DevTools ở đầu bên kia mới biết.
+const micBar = document.getElementById('micBar')
+const micLevel = document.getElementById('micLevel')
+const micHint = document.getElementById('micHint')
+let micCtx = null, micAnalyser = null, micRaf = null, micSilentSince = 0
+
+// Chỉ vẽ khi panel đang mở. Thanh đo nằm trong panel nên lúc panel đóng, vòng
+// requestAnimationFrame chỉ tổ hâm máy và tốn pin — mà đây là điện thoại đang
+// vừa encode video vừa giữ màn hình sáng.
+function micMeterRunning() {
+  return micRaf !== null
+}
+
+function stopMicLoop() {
+  cancelAnimationFrame(micRaf)
+  micRaf = null
+}
+
+function stopMicMeter() {
+  stopMicLoop()
+  micCtx?.close().catch(() => {})
+  micCtx = null
+  micAnalyser = null
+  micBar.hidden = true
+  micHint.textContent = ''
+  micLevel.style.width = '0%'
+}
+
+function startMicMeter(stream) {
+  stopMicMeter()
+  const track = stream.getAudioTracks()[0]
+  if (!track) return
+
+  micBar.hidden = false
+  micCtx = new AudioContext()
+  micAnalyser = micCtx.createAnalyser()
+  micAnalyser.fftSize = 512
+  micCtx.createMediaStreamSource(new MediaStream([track])).connect(micAnalyser)
+
+  if (settingsPanel.classList.contains('open')) resumeMicLoop()
+}
+
+function resumeMicLoop() {
+  if (!micAnalyser || micMeterRunning()) return
+  const buf = new Float32Array(micAnalyser.fftSize)
+  micSilentSince = performance.now()
+
+  const tick = () => {
+    micAnalyser.getFloatTimeDomainData(buf)
+    let peak = 0
+    for (const x of buf) peak = Math.max(peak, Math.abs(x))
+    // Thang căn bậc hai cho dễ nhìn: giọng nói bình thường nằm quanh 0.05–0.3,
+    // vẽ tuyến tính thì gần như không thấy cột nào nhúc nhích
+    micLevel.style.width = Math.min(100, Math.sqrt(peak) * 140) + '%'
+
+    if (peak > 0.01) {
+      micSilentSince = performance.now()
+      micHint.textContent = ''
+    } else if (performance.now() - micSilentSince > 4000) {
+      // Im lặng tuyệt đối vài giây gần như luôn là mic bị app khác chiếm hoặc bị
+      // chặn ở tầng hệ điều hành — nói thẳng thay vì để người dùng đoán
+      micHint.textContent = t('phone.micSilent')
+    }
+    micRaf = requestAnimationFrame(tick)
+  }
+  tick()
+}
+
 // ── Điều khiển phần cứng camera (zoom / đèn) ────────────────────────────────
 // Web không chạm được vào chế độ "làm đẹp" hay xoá phông của app Camera hãng —
 // những cái đó nằm trong app OEM. Nhưng zoom/torch là năng lực thật của camera,
@@ -993,6 +1260,10 @@ torchBtn.addEventListener('click', async () => {
 document.getElementById('qFlipCam').addEventListener('click', async () => {
   facingMode = facingMode === 'environment' ? 'user' : 'environment'
   phoneCfg.facingMode = facingMode
+  // Phải đồng bộ cả dropdown trong panel: nút Lưu đọc giá trị từ đó, nên nếu để
+  // nó giữ giá trị cũ thì bấm Lưu sẽ lật camera ngược về mặt trước đó
+  document.getElementById('cfg-facingMode').value = facingMode
+  saveViewerCfg({ phone: { ...phoneCfg } })
   if (localStream) await startStream()
 })
 
@@ -1014,7 +1285,10 @@ document.getElementById('qRotate').addEventListener('click', function() {
   saveViewerCfg({ rotation: cfg.rotation })
 })
 
-document.getElementById('qSettings').addEventListener('click', () => settingsPanel.classList.add('open'))
+document.getElementById('qSettings').addEventListener('click', () => {
+  settingsPanel.classList.add('open')
+  resumeMicLoop()
+})
 
 // ── Ngôn ngữ ────────────────────────────────────────────────────────────────
 const langSelect = document.getElementById('langSelect')
@@ -1027,6 +1301,7 @@ langSelect.addEventListener('change', () => setLang(langSelect.value))
 // lo được phần đánh dấu sẵn trong HTML
 addEventListener('fc:langchange', () => {
   resPreset.options[resPreset.options.length - 1].text = t('cfg.custom')
+  showActualResolution()
   updateBitrateHint()
   refreshStreamStatus()
 })

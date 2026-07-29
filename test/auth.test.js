@@ -92,6 +92,34 @@ describe('trang 401', { skip: !listLocalIPs().length && 'máy không có card m�
     assert.deepStrictEqual(await res.json(), { error: 'unauthorized' })
   })
 
+  // Gõ tay trên điện thoại rất hay dính chữ hoa: bàn phím di động tự viết hoa ký
+  // tự đầu và không phải bàn phím nào cũng tôn trọng autocapitalize. Trước đây
+  // token hoa bị từ chối, nên trang 401 "không hoạt động trên điện thoại" trong
+  // khi trên PC vẫn tốt.
+  test('chấp nhận token viết hoa', async () => {
+    const res = await fetch(`http://${lanIP}:${server.port}/viewer.html?t=${server.token.toUpperCase()}`)
+    assert.strictEqual(res.status, 200)
+  })
+
+  test('chấp nhận token có khoảng trắng thừa (dán từ clipboard)', async () => {
+    const padded = encodeURIComponent(`  ${server.token}  `)
+    const res = await fetch(`http://${lanIP}:${server.port}/viewer.html?t=${padded}`)
+    assert.strictEqual(res.status, 200)
+  })
+
+  test('token sai vẫn bị chặn sau khi chuẩn hoá', async () => {
+    const res = await fetch(`http://${lanIP}:${server.port}/viewer.html?t=DEADBEEFDEADBEEFDEADBEEFDEADBEEF`)
+    assert.strictEqual(res.status, 401)
+  })
+
+  // Ô nhập không được ràng buộc chỉ chữ thường, nếu không bàn phím viết hoa là
+  // form từ chối submit với một tooltip rất mờ nhạt
+  test('ô nhập token chấp nhận cả chữ hoa', async () => {
+    const res = await fetch(`http://${lanIP}:${server.port}/viewer.html`)
+    const body = await res.text()
+    assert.match(body, /pattern="[^"]*a-fA-F0-9/)
+  })
+
   test('token đúng trên URL thì vào được và được set cookie', async () => {
     const res = await fetch(`http://${lanIP}:${server.port}/viewer.html?t=${server.token}`, {
       redirect: 'manual',

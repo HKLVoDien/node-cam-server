@@ -216,7 +216,7 @@ Server listen trên `0.0.0.0`, nên nếu không có lớp này thì **bất k�
 
 Độ phân giải chọn từ dropdown dựng sẵn (VGA → 4K) hoặc **Tuỳ chỉnh…** để nhập kích thước riêng. Bitrate cũng vậy.
 
-> Camera điện thoại luôn xuất theo chiều ngang của sensor rồi mới để phần mềm xoay, nên đặt số "dọc" (ví dụ `720×1080`) không có tác dụng như bạn nghĩ — máy vẫn trả về `1080×720`. Cứ đặt theo chiều ngang.
+> **Khung hình dọc hay ngang là do bạn cầm điện thoại thế nào**, không phải do con số trong cấu hình. Đặt `1280×720` mà cầm dọc thì máy vẫn trả về `720×1280` — trình duyệt xoay theo hướng thiết bị và chỉ coi hai số kia là gợi ý. Muốn khung ngang thì **xoay ngang điện thoại trước khi bật camera**. Nếu buộc phải cầm dọc, dùng nút **↻ 90°** trên viewer để xoay lại hình.
 
 ### Bitrate cần bao nhiêu
 
@@ -363,6 +363,19 @@ Thường do máy có nhiều card mạng (Docker, WSL, VirtualBox, VMware, VPN,
 ### Phone báo 401 Unauthorized
 
 Thiết bị trong LAN cần token. Quét lại QR WiFi trong terminal (QR đã kèm token), hoặc copy URL đầy đủ mà terminal in ra. Xem mục [Xác thực (token)](#xác-thực-token).
+
+### Hình ra dọc, hai bên toàn viền đen
+
+Điện thoại đang được cầm dọc. Trình duyệt xoay khung hình theo hướng thiết bị, nên dù cấu hình ghi `1280×720` thì camera vẫn trả về `720×1280` — đảo hai số cũng không ép được.
+
+Hai cách, theo thứ tự nên thử:
+
+1. **Mở khoá xoay màn hình, rồi cầm ngang điện thoại và bật lại camera.** Đây là cách duy nhất cho ra khung ngang thật, đầy đủ độ phân giải.
+2. **Bấm ↻ 90° trên viewer** nếu buộc phải cầm dọc. Hình xoay đúng chiều, nhưng khung vẫn là khung dọc nên OBS sẽ thấy hình nằm ngang trong một khung dọc.
+
+> **Đừng khoá xoay màn hình.** Trình duyệt không biết hướng vật lý của máy — nó chỉ nhìn `screen.orientation`. Khi màn hình bị khoá dọc mà bạn cầm máy ngang, cảm biến đã xoay 90° nhưng trình duyệt vẫn tưởng máy đang dọc nên không xoay bù: khung vẫn dọc **và nội dung nằm nghiêng**. App Camera của hãng không bị vậy vì nó hỏi gia tốc kế chứ không hỏi màn hình.
+>
+> Dấu hiệu nhận biết: quay một vật đứng thẳng (chai nước chẳng hạn) — cầm dọc thì nó đứng, cầm ngang thì nó nằm. Đó là lúc mở khoá xoay, hoặc dùng nút ↻ 90°.
 
 ### Hình không nét
 

@@ -102,11 +102,19 @@ function unauthorizedPage(lang) {
   <div class="icon">🔒</div>
   <h1>${s('401.heading')}</h1>
   <p>${s('401.desc')}<br>${s('401.desc2')}</p>
-  <input name="t" placeholder="${s('401.placeholder')}" pattern="[a-f0-9]{32}" required autofocus
-         autocomplete="off" autocapitalize="off" spellcheck="false">
+  <input name="t" placeholder="${s('401.placeholder')}" required autofocus
+         pattern="\\s*[a-fA-F0-9]{32}\\s*" inputmode="latin" enterkeyhint="go"
+         autocomplete="off" autocapitalize="none" spellcheck="false">
   <button type="submit">${s('401.submit')}</button>
 </form>
 </body></html>`
+}
+
+// Token gõ tay trên điện thoại hay dính chữ hoa (bàn phím di động tự viết hoa ký
+// tự đầu, và không phải bàn phím nào cũng tôn trọng autocapitalize) hoặc khoảng
+// trắng thừa khi dán. Token vốn là hex thường nên chuẩn hoá không làm yếu đi.
+function normalizeToken(value) {
+  return typeof value === 'string' ? value.trim().toLowerCase() : value
 }
 
 app.use((req, res, next) => {
@@ -114,7 +122,7 @@ app.use((req, res, next) => {
 
   // Vào lần đầu bằng link kèm ?t= (từ QR) → set cookie để các request sau
   // (/socket.io/*, /api/config, ảnh...) không cần mang token trên URL nữa
-  if (req.query.t === TOKEN) {
+  if (normalizeToken(req.query.t) === TOKEN) {
     res.setHeader('Set-Cookie', `fc_token=${TOKEN}; Path=/; Max-Age=31536000; SameSite=Lax`)
     return next()
   }
@@ -395,8 +403,10 @@ function setupSignaling(io, peer, label) {
     // SDP/ICE đi đích danh: phone giữ một peer connection riêng cho mỗi viewer nên
     // broadcast cả phòng như trước sẽ khiến các viewer nhận nhầm của nhau
     socket.on(EV.OFFER, (data) => {
-      console.log(`[${label}] OFFER  ${socket.id} → ${data.to}`)
-      sendTo(socket, peer, data.to, EV.OFFER, { sdp: data.sdp, from: socket.id })
+      console.log(`[${label}] OFFER  ${socket.id} → ${data.to}${data.iceRestart ? ' (ICE restart)' : ''}`)
+      // iceRestart phải đi kèm: viewer dùng nó để biết nên tái dùng peer
+      // connection cũ hay dựng cái mới
+      sendTo(socket, peer, data.to, EV.OFFER, { sdp: data.sdp, from: socket.id, iceRestart: !!data.iceRestart })
     })
 
     socket.on(EV.ANSWER, (data) => {

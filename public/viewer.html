@@ -21,8 +21,10 @@
   }
   /* Lớp làm mịn da: cùng một stream, blur nhẹ chồng lên bản sắc nét.
      Đây là cách gần nhất với "làm mịn" mà CSS thuần làm được — không phải
-     bilateral filter thật, nhưng gần như miễn phí vì GPU composite. */
-  #videoSoft { pointer-events: none; opacity: 0; }
+     bilateral filter thật.
+     Mặc định display:none chứ không chỉ opacity:0 — blur là hiệu ứng đắt và
+     lớp ẩn vẫn bị tính nếu còn nằm trong vòng render. syncSoftLayer() bật lại. */
+  #videoSoft { pointer-events: none; opacity: 0; display: none; }
 
   #controls {
     position: fixed;
@@ -271,6 +273,24 @@ function applyFilter() {
   // Lớp mịn dùng cùng bộ filter + blur, độ mờ chính là mức "làm mịn"
   videoSoft.style.filter = `${css} blur(6px)`
   videoSoft.style.opacity = f.softness ?? 0
+  syncSoftLayer()
+}
+
+// Bản chỉ-video của stream, dành riêng cho lớp mịn (xem ontrack)
+let softStream = null
+
+// `opacity: 0` chỉ giấu kết quả chứ không huỷ việc: trình duyệt vẫn render lớp này
+// và vẫn tính blur(6px) cho từng khung hình. Với nguồn 1080p@30fps đó là một phép
+// blur toàn màn hình 30 lần mỗi giây rồi vứt đi — nghe rõ ở tiếng quạt. Chỉ
+// `display: none` mới cắt hẳn khỏi vòng render.
+function syncSoftLayer() {
+  const on = (filters.softness ?? 0) > 0 && Boolean(softStream)
+  // Phải ghi 'block' chứ không phải '': xoá inline style sẽ rơi về `display: none`
+  // của quy tắc CSS mặc định, lớp mịn không bao giờ hiện lại
+  videoSoft.style.display = on ? 'block' : 'none'
+  const want = on ? softStream : null
+  // Gán srcObject lặp lại sẽ khởi động lại pipeline video — chỉ đụng khi khác
+  if (videoSoft.srcObject !== want) videoSoft.srcObject = want
 }
 
 function loadFilters(cfg) {
@@ -441,7 +461,10 @@ document.addEventListener('dblclick', () => {
 const audioBtn = document.getElementById('audioBtn')
 
 function syncAudioBtn() {
-  audioBtn.textContent = video.muted ? '🔇 Tiếng' : '🔊 Tiếng'
+  // Chỉ đổi icon, không đụng tới phần chữ: gán textContent cho cả nút sẽ xoá mất
+  // thẻ <span data-i18n> bên trong, và từ đó nút kẹt tiếng Việt vĩnh viễn dù có
+  // đổi ngôn ngữ
+  document.getElementById('audioIcon').textContent = video.muted ? '🔇' : '🔊'
   audioBtn.classList.toggle('active', !video.muted)
 }
 
@@ -456,8 +479,9 @@ function refreshAudioBtn(stream) {
 
 audioBtn.addEventListener('click', () => {
   video.muted = !video.muted
-  // videoSoft dùng chung MediaStream với video — bỏ câm cả hai là nghe thành hai
-  // luồng chồng nhau, nên lớp mịn luôn giữ câm
+  // Một số trình duyệt tạm dừng video khi bị bỏ câm, kể cả khi thao tác xuất phát
+  // từ cú click. Gọi lại play() là biện pháp rẻ và không gây hại nếu đang chạy.
+  video.play().catch(e => console.warn('play() sau khi bỏ câm thất bại:', e.name))
   syncAudioBtn()
 })
 
@@ -510,6 +534,7 @@ function startStats() {
 function stopStats() {
   clearInterval(statsTimer)
   clearTimeout(playbackWatch)
+  stopAliveLoop()
   lastBytes = 0
   lastStatsAt = 0
   statsEl.textContent = ''
@@ -540,6 +565,11 @@ function describeIceFailure(state) {
   return 'viewer.disconnected'
 }
 
+// Khai báo trước keepAlive(): khi trình duyệt không có Wake Lock thì thân hàm
+// async chạy thẳng một mạch, chạm tới `gl` ngay trong lượt đồng bộ này
+let gl = null
+let aliveRaf = null
+
 async function keepAlive() {
   // Wake Lock: chống PC ngủ khi OBS đang lấy hình. Không phải browser nào cũng có.
   try {
@@ -563,16 +593,30 @@ async function keepAlive() {
   canvas.width = canvas.height = 1
   canvas.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none'
   document.body.appendChild(canvas)
-  const gl = canvas.getContext('webgl')
+  gl = canvas.getContext('webgl')
   // gl có thể null khi WebGL bị chặn — không check thì gl.clear() ném lỗi mỗi frame
-  if (gl) {
-    function tick() { gl.clear(gl.COLOR_BUFFER_BIT); requestAnimationFrame(tick) }
-    tick()
-  } else {
-    console.warn('WebGL không khả dụng — bỏ qua vòng lặp chống throttle')
-  }
+  if (!gl) console.warn('WebGL không khả dụng — bỏ qua vòng lặp chống throttle')
 }
 keepAlive()
+
+// Vòng lặp này tồn tại để giữ tab khỏi bị throttle khi đang tải hình cho OBS.
+// Nó chạy 60 lần/giây và không bao giờ để CPU rơi vào trạng thái nghỉ, nên chỉ
+// đáng bật đúng lúc có việc — trước đây nó chạy ngay từ khi mở trang và tiếp tục
+// cả khi phone đã ngắt, quạt laptop kêu suốt dù màn hình chẳng có gì.
+function startAliveLoop() {
+  if (aliveRaf !== null || !gl) return
+  const tick = () => {
+    gl.clear(gl.COLOR_BUFFER_BIT)
+    aliveRaf = requestAnimationFrame(tick)
+  }
+  tick()
+}
+
+function stopAliveLoop() {
+  if (aliveRaf === null) return
+  cancelAnimationFrame(aliveRaf)
+  aliveRaf = null
+}
 
 socket.on('connect', () => {
   // Server tự bắn VIEWER_REQUEST hộ ngay khi join, nên không cần hỏi thêm ở đây
@@ -594,10 +638,18 @@ async function flushIce() {
   }
 }
 
-socket.on(EV.OFFER, async ({ from, sdp }) => {
-  // Offer lần đầu và offer sau ICE restart đều tới đây; chỉ dựng lại connection
-  // khi đúng là phiên mới, còn ICE restart thì tái dùng pc để không mất hình
-  const isRestart = pc && from === phoneId && pc.connectionState !== 'closed'
+socket.on(EV.OFFER, async ({ from, sdp, iceRestart }) => {
+  // Ba loại offer cùng tới đây: lần đầu, sau ICE restart, và sau khi phone dựng
+  // lại peer connection (bật/tắt mic làm đổi cấu trúc SDP nên buộc phải chào hỏi
+  // lại từ đầu).
+  //
+  // Chỉ ICE restart mới được tái dùng `pc` — nó vẫn là cùng một connection, chỉ
+  // đổi đường truyền. Hai loại kia mang SDP của một connection khác hẳn; nhét
+  // vào `pc` cũ là hỏng luồng và người dùng phải F5.
+  //
+  // Trước đây chỗ này chỉ so `from`, mà cả ba loại đều mang cùng socket id của
+  // phone — nên bật mic là mất hình.
+  const isRestart = iceRestart && pc && from === phoneId && pc.connectionState !== 'closed'
   if (!isRestart) {
     if (pc) { pc.close(); pc = null }
     pendingIce = []
@@ -606,7 +658,13 @@ socket.on(EV.OFFER, async ({ from, sdp }) => {
       // Cả hai lớp dùng chung một MediaStream — không tốn thêm băng thông hay
       // decode, chỉ là hai element cùng vẽ một nguồn
       video.srcObject = streams[0]
-      videoSoft.srcObject = streams[0]
+      // Lớp mịn chỉ nhận video track. Trước đây nó dùng chung cả MediaStream nên
+      // mang theo audio — vô hại vì element đang câm, nhưng chỉ cần một lần lỡ
+      // tay bỏ câm là nghe hai luồng chồng nhau. Cắt hẳn audio ra thì không còn
+      // phải dựa vào chuyện đó nữa.
+      softStream = new MediaStream(streams[0].getVideoTracks())
+      // Chỉ thật sự gắn vào element khi người dùng có bật độ mịn
+      syncSoftLayer()
       // ontrack chạy một lần cho mỗi track — audio có thể tới sau video, nên phải
       // kiểm tra lại ở cả hai lần chứ không chỉ lần đầu
       refreshAudioBtn(streams[0])
@@ -614,12 +672,16 @@ socket.on(EV.OFFER, async ({ from, sdp }) => {
       // là thành hai chấm cạnh nhau
       setStatus('viewer.streaming', 'live')
       startStats()
+      startAliveLoop()   // từ đây mới có hình để giữ, trước đó giữ cũng vô nghĩa
       watchPlayback()
     }
     pc.onicecandidate = ({ candidate }) => {
       if (candidate) socket.emit(EV.ICE, { to: phoneId, candidate })
     }
     pc.onconnectionstatechange = () => {
+      // Sau ICE restart, hình quay lại mà ontrack không bắn thêm lần nào — bật lại
+      // ở đây, nếu không vòng giữ tab đã tắt lúc 'disconnected' sẽ không ai mở lại
+      if (pc.connectionState === 'connected' && video.srcObject) startAliveLoop()
       if (['disconnected', 'failed'].includes(pc.connectionState)) {
         setStatus(describeIceFailure(pc.iceConnectionState), 'error')
         stopStats()
@@ -679,7 +741,8 @@ socket.on(EV.PHONE_DISCONNECTED, () => {
   // Bật lại vòng hỏi stream: trước đây retry đã tự tắt sau lần stream đầu tiên
   // nên phone quay lại cũng không ai yêu cầu offer mới → phải F5 thủ công
   video.srcObject = null
-  videoSoft.srcObject = null
+  softStream = null
+  syncSoftLayer()
   refreshAudioBtn(null)
   phoneId = null
   stopStats()

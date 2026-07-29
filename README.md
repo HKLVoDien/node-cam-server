@@ -194,7 +194,7 @@ Both servers listen on `0.0.0.0`, so without this layer **anyone on your LAN cou
 
 Pick a resolution from the preset dropdown (VGA → 4K) or choose **Custom…** to type your own. Same for bitrate.
 
-> Phone cameras always output along the sensor's long edge and let software rotate afterwards, so asking for a "portrait" size (say `720×1080`) doesn't do what you'd expect — you still get `1080×720`. Specify landscape dimensions.
+> **Whether you get a portrait or landscape frame depends on how you hold the phone**, not on the numbers in the config. Ask for `1280×720` while holding the phone upright and you'll still get `720×1280` — the browser rotates with the device and treats those numbers as a hint. For a landscape frame, **turn the phone sideways before starting the camera**. If you have to hold it upright, use the **↻ 90°** button on the viewer to rotate the picture back.
 
 ### How much bitrate
 
@@ -340,6 +340,19 @@ The QR code may carry the wrong address if the machine has several network inter
 ### The phone gets 401 Unauthorized
 
 It reached the server without a token. Either scan the QR code from the terminal, or type the token into the field on the 401 page. The token is in `.token` and is printed at startup.
+
+### The picture is portrait with black bars either side
+
+The phone is being held upright. The browser rotates the frame with the device, so even with `1280×720` in the config the camera returns `720×1280` — swapping the numbers won't force it either.
+
+Two options, best first:
+
+1. **Unlock screen rotation, then turn the phone sideways and restart the camera.** The only way to get a genuine landscape frame at full resolution.
+2. **Press ↻ 90° on the viewer** if you must hold it upright. The picture ends up the right way round, but the frame is still portrait, so OBS sees a sideways image inside a tall frame.
+
+> **Do not lock screen rotation.** The browser has no idea which way the phone is physically held — it only reads `screen.orientation`. With rotation locked to portrait and the phone turned sideways, the sensor has rotated 90° but the browser still believes the device is upright, so it never compensates: the frame stays portrait **and everything in it lies on its side**. The stock camera app avoids this because it asks the accelerometer, not the screen.
+>
+> How to spot it: film something standing upright, such as a bottle. Held upright it stands; turned sideways it lies down. That is the moment to unlock rotation, or fall back to ↻ 90°.
 
 ### The picture looks soft
 
