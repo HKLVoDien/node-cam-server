@@ -2,7 +2,7 @@
   Mission: Lộ trình phát triển FaceCam Server — từ công cụ cá nhân thành project
            open-source người khác cài được, kèm các quyết định nền tảng và lý do.
   Author: DienJVo
-  Version: 1.0.0
+  Version: 1.1.0
 -->
 
 # Lộ trình phát triển
@@ -118,6 +118,22 @@ Quá phiền so với giá trị, và vẫn không biến WiFi mode thành thứ
 người phổ thông — USB mode mới là đường đó. Nếu sau này làm, bắt buộc sinh CA
 riêng trên từng máy: nhúng CA dùng chung vào bản phát hành là lỗ hổng nghiêm
 trọng (Lenovo Superfish, Dell eDellRoot).
+
+### Ngoài lộ trình — Chiếu màn hình điện thoại qua scrcpy (2026-10-15)
+
+Đã làm: trang điều khiển ở `127.0.0.1:7071` (`scrcpy.js`, `screen-control.js`,
+`public/screen.html`), chỉ Android.
+
+- **Vì sao scrcpy chứ không tự viết app Android:** trình duyệt trên điện thoại
+  không có `getDisplayMedia` ổn định nên `phone.html` không chụp được màn hình.
+  scrcpy là OSS, chạy cục bộ qua adb, không qua cloud — khớp mục 2.
+- **Để sau:** tự kết nối qua mDNS + ghép đôi bằng QR (cần thử trên mạng không cách
+  ly thiết bị); ghi file trực tiếp bằng `--record` (giữ độ phân giải gốc, không nén
+  lại). Khi làm G1 "nhúng adb" thì cân nhắc nhúng luôn bản scrcpy (Apache 2.0) để
+  hai tính năng dùng chung một adb.
+- **Không làm:** tự xoay camera của scrcpy (scrcpy gửi khung gốc của cảm biến, muốn
+  tự xoay thì dùng chế độ webcam); hiển thị scrcpy ngay trong trình duyệt (phải tự
+  nói giao thức của scrcpy-server, dễ vỡ mỗi lần nâng phiên bản).
 
 ### Giai đoạn 1 — Một file exe
 

@@ -13,6 +13,9 @@ const QRCode = require('qrcode')
 const { ROLE, EV } = require('./public/shared.js')
 const { ensureCert } = require('./certs.js')
 const { listLocalIPs, getLocalIP } = require('./network.js')
+// Điều khiển scrcpy: server riêng chỉ nghe 127.0.0.1, tách khỏi app chính (0.0.0.0)
+const { createScreenService } = require('./scrcpy.js')
+const { startScreenControl } = require('./screen-control.js')
 // Bảng chuỗi dùng chung với client — trang 401 render ở server nên phải tra tay
 const { STRINGS: I18N_STRINGS } = require('./public/i18n.js')
 
@@ -20,6 +23,7 @@ const app = express()
 
 const HTTP_PORT = Number(process.env.PORT) || 7070
 const HTTPS_PORT = Number(process.env.HTTPS_PORT) || 7443
+const SCREEN_PORT = Number(process.env.SCREEN_PORT) || 7071
 
 // Nơi chứa dữ liệu chạy (config, token, cert) — tách khỏi nơi chứa code. Test cần
 // trỏ sang thư mục tạm để không ghi đè config/token/cert thật của người dùng, và
@@ -314,7 +318,10 @@ app.get('/api/urls', async (req, res) => {
     QRCode.toDataURL(wifiURL),
   ])
 
-  res.json({ usbURL, wifiURL, usbQR, wifiQR, ip, ips })
+  // Port điều khiển scrcpy không mở được (bị chiếm) thì không trả về — nếu không thẻ
+  // trên trang chủ sẽ trỏ vào một port của process khác
+  const screenPort = screenControl.server.listening ? SCREEN_PORT : null
+  res.json({ usbURL, wifiURL, usbQR, wifiQR, ip, ips, screenPort })
 })
 
 // Bridge: mỗi event phải gửi sang cả io kia, vì phone có thể ở HTTPS còn viewer ở
@@ -564,6 +571,23 @@ try {
   setupSignaling(httpIO, null, 'HTTP')
 }
 
+// Điều khiển scrcpy (chiếu màn hình điện thoại). Tính năng phụ → port bận thì cảnh báo
+// và chạy tiếp, giống khối HTTPS. Service chỉ tìm scrcpy/adb khi người dùng thật sự
+// dùng tới, nên khởi động server không tốn gì và không cần scrcpy được cài sẵn.
+const screenService = createScreenService()
+const screenControl = startScreenControl({
+  port: SCREEN_PORT,
+  service: screenService,
+  publicDir: path.join(__dirname, 'public'),
+})
+screenControl.server.on('listening', () => {
+  console.log(`[SCREEN] http://127.0.0.1:${SCREEN_PORT}  (điều khiển scrcpy, chỉ PC này)`)
+})
+screenControl.server.on('error', (err) => {
+  describeListenError(err, SCREEN_PORT, 'SCREEN')
+  console.warn('[SCREEN] Bỏ qua điều khiển scrcpy — camera vẫn hoạt động bình thường.\n')
+})
+
 // Ctrl+C khi không đóng socket sẽ để client treo chờ timeout thay vì biết ngay
 // là server đã tắt
 let shuttingDown = false
@@ -575,6 +599,8 @@ function shutdown(signal) {
   httpsIO?.close()
   httpServer.close()
   httpsServerRef?.close()
+  screenControl.close()
+  screenService.stopAll()   // không để scrcpy mồ côi chạy tiếp sau khi server tắt
   // Chốt chặn: nếu còn kết nối nào không chịu đóng thì vẫn thoát sau 2s
   setTimeout(() => process.exit(0), 2000).unref()
 }

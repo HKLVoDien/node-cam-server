@@ -4,7 +4,7 @@
  *   Accept-Language. Lệch khoá là lỗi im lặng: người dùng chỉ thấy một chữ lạ
  *   nằm giữa giao diện chứ không có lỗi nào báo ra.
  * Author: DienJVo
- * Version: 1.0.0
+ * Version: 1.0.1
  */
 const { test, describe, before, after } = require('node:test')
 const assert = require('node:assert')
@@ -16,7 +16,7 @@ const { STRINGS, t, currentLang } = require('../public/i18n.js')
 const { FILTER_KEYS, FILTER_PRESETS } = require('../public/shared.js')
 
 const PUBLIC = path.join(__dirname, '..', 'public')
-const PAGES = ['index', 'viewer', 'phone']
+const PAGES = ['index', 'viewer', 'phone', 'screen']
 
 /** Mọi khoá i18n xuất hiện trong một trang, bỏ qua khoá dựng động */
 function keysUsedIn(html) {
