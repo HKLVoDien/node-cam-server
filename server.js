@@ -55,6 +55,15 @@ function isLocalAddress(addr) {
   return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1'
 }
 
+// Địa chỉ nguồn là loopback chưa đủ: một trang web lạ đang mở trên chính PC này có
+// thể dùng DNS rebinding (trỏ tên miền của họ về 127.0.0.1) để gửi request tới đây và
+// đọc được kết quả. Trình duyệt khi đó vẫn gửi Host là tên miền kia → chỉ miễn token
+// khi Host cũng là tên loopback. Không khớp thì rơi về kiểm token như máy trong LAN.
+const LOOPBACK_HOST_RE = /^(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?$/i
+function isTrustedLocal(addr, host) {
+  return isLocalAddress(addr) && LOOPBACK_HOST_RE.test(host ?? '')
+}
+
 function readCookie(cookieHeader, name) {
   if (!cookieHeader) return null
   for (const part of cookieHeader.split(';')) {
@@ -122,7 +131,7 @@ function normalizeToken(value) {
 }
 
 app.use((req, res, next) => {
-  if (isLocalAddress(req.socket.remoteAddress)) return next()
+  if (isTrustedLocal(req.socket.remoteAddress, req.headers.host)) return next()
 
   // Vào lần đầu bằng link kèm ?t= (từ QR) → set cookie để các request sau
   // (/socket.io/*, /api/config, ảnh...) không cần mang token trên URL nữa
@@ -147,7 +156,7 @@ app.use((req, res, next) => {
 // signaling. Cookie được browser gửi kèm handshake vì cùng origin.
 function guardSocket(io) {
   io.use((socket, next) => {
-    if (isLocalAddress(socket.handshake.address)) return next()
+    if (isTrustedLocal(socket.handshake.address, socket.handshake.headers.host)) return next()
     if (readCookie(socket.handshake.headers.cookie, 'fc_token') === TOKEN) return next()
     if (socket.handshake.auth?.token === TOKEN) return next()
     console.warn(`[AUTH] Từ chối socket từ ${socket.handshake.address}`)

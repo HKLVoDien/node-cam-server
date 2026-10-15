@@ -4,10 +4,11 @@
  *   bản cũ ghi cứng địa chỉ nên đỏ mỗi lần máy đổi mạng, và mất thời gian mới
  *   nhận ra là test sai chứ không phải code sai.
  * Author: DienJVo
- * Version: 1.0.0
+ * Version: 1.1.0
  */
 const { test, describe, before, after } = require('node:test')
 const assert = require('node:assert')
+const http = require('node:http')
 
 const { startServer, connect } = require('./helpers.js')
 const { listLocalIPs } = require('../network.js')
@@ -42,6 +43,21 @@ describe('miễn trừ localhost', () => {
   test('localhost đọc được config không cần token', async () => {
     const res = await fetch(`${server.url}/api/config`)
     assert.strictEqual(res.status, 200)
+  })
+
+  // DNS rebinding: trang lạ trỏ tên miền của nó về 127.0.0.1 — request đến từ loopback
+  // nhưng Host là tên miền lạ, nên không được hưởng miễn trừ
+  test('loopback nhưng Host lạ thì phải có token', async () => {
+    const status = (host) => new Promise((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port: server.port, path: '/api/urls', headers: { Host: host } },
+        (res) => { res.resume(); resolve(res.statusCode) })
+      req.on('error', reject)
+      req.end()
+    })
+    assert.strictEqual(await status(`evil.example:${server.port}`), 401)
+    assert.strictEqual(await status(`localhost.evil.example:${server.port}`), 401)
+    assert.strictEqual(await status(`localhost:${server.port}`), 200)
+    assert.strictEqual(await status(`[::1]:${server.port}`), 200)
   })
 })
 
