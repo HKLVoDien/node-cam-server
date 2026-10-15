@@ -1,0 +1,1033 @@
+<!--
+  Mission: Bảng điều khiển chiếu màn hình điện thoại bằng scrcpy — chọn thiết bị,
+    ghép nối/kết nối ADB không dây, chọn tuỳ chọn rồi bắt đầu/dừng phiên. Chỉ được
+    phục vụ bởi server điều khiển riêng (127.0.0.1), không nằm trong server chính.
+    Phần giải thích nằm sau biểu tượng ⓘ / mục thu gọn để trang gọn mắt.
+  Author: DienJVo
+  Version: 1.2.0
+-->
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title data-i18n="screen.title">FaceCam — Screen</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🖥️</text></svg>">
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0f;
+    color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px;
+    gap: 20px;
+  }
+
+  .top { width: 100%; max-width: 1180px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .logo { display: flex; align-items: center; gap: 12px; }
+  .logo-icon {
+    width: 44px; height: 44px;
+    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px;
+  }
+  .logo h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; }
+  .logo .sub { font-size: 12px; opacity: 0.55; margin-top: 2px; }
+
+  /* Một cột trên màn hẹp; từ 1024px chia 2 cột (trái: thiết bị, phải: tuỳ chọn + hành động).
+     minmax(0, …) để nội dung dài (tên máy, serial) không đẩy cột rộng ra gây cuộn ngang. */
+  .layout { width: 100%; max-width: 1180px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; align-items: start; }
+  .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .layout > .full { grid-column: 1 / -1; }
+  @media (min-width: 1024px) {
+    .layout { grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); }
+  }
+  @media (max-width: 480px) {
+    body { padding: 14px; gap: 16px; }
+    .card { padding: 16px; border-radius: 16px; }
+  }
+
+  .card {
+    background: #141418;
+    border: 1px solid #222;
+    border-radius: 20px;
+    padding: 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+  }
+  .card h2 { font-size: 15px; font-weight: 600; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .card.warn { border-color: #92400e; background: #1c1407; }
+  .card.warn h2 { color: #fbbf24; }
+
+  .muted { font-size: 12px; color: #8a8a94; line-height: 1.7; }
+  code, .mono {
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    background: rgba(255,255,255,0.06);
+    padding: 3px 8px;
+    border-radius: 6px;
+    color: #ccc;
+    word-break: break-all;
+  }
+  kbd {
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    background: #22222a;
+    border: 1px solid #33333f;
+    border-bottom-width: 2px;
+    border-radius: 5px;
+    padding: 1px 6px;
+    color: #ddd;
+  }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    padding: 10px 20px;
+    border-radius: 10px;
+    font-size: 14px; font-weight: 500;
+    cursor: pointer;
+    border: none;
+    transition: opacity 0.15s;
+  }
+  .btn:hover { opacity: 0.85; }
+  .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .btn-primary { background: #3b82f6; color: #fff; }
+  .btn-danger { background: #dc2626; color: #fff; }
+  .btn-secondary { background: #1a1a1a; color: #aaa; border: 1px solid #2a2a2a; }
+  .btn-small { padding: 6px 12px; font-size: 12px; }
+
+  /* Viền focus rõ cho bàn phím; chuột không bị ảnh hưởng nhờ :focus-visible */
+  button:focus-visible, summary:focus-visible, select:focus-visible, input[type=text]:focus-visible {
+    outline: 2px solid #93c5fd;
+    outline-offset: 2px;
+  }
+
+  input[type=text], select {
+    width: 100%;
+    background: #1a1a1a;
+    border: 1px solid #2a2a2a;
+    color: #ddd;
+    font-size: 13px;
+    padding: 9px 12px;
+    border-radius: 10px;
+  }
+  input[type=text]:focus, select:focus { border-color: #3b82f6; }
+  select option { background: #16161c; color: #ddd; }
+  select[size] { padding: 4px; }
+  select[size] option { padding: 5px 8px; border-radius: 6px; }
+  /* Chrome ép màu dòng đã chọn (xanh nhạt + chữ xám) — trên nền tối trông như đang
+     hover nên người dùng tưởng chưa chọn được. background-color bị UA khoá, phải
+     dùng gradient (background-image) mới đè được. */
+  select[size] option:checked { background: linear-gradient(#2563eb, #2563eb); color: #fff; }
+
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .row > input[type=text] { flex: 1 1 200px; width: auto; }
+  .row.compact > input[type=text] { flex: 1 1 130px; min-width: 0; }
+  .row.compact > input.code { flex: 0 1 100px; }
+  .field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .field .title, .title { font-size: 12px; color: #a0a0aa; font-weight: 500; }
+  .lbl { display: flex; align-items: center; gap: 2px; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 520px) { .two { grid-template-columns: minmax(0, 1fr); } }
+
+  /* Nguồn hình: 3 ô chọn dạng nút phân đoạn. Input thật phủ kín ô (opacity 0) để vẫn
+     bấm/lăn phím mũi tên như radio chuẩn; trạng thái chọn hiện bằng viền + dấu ✓,
+     không chỉ bằng màu. */
+  fieldset.seg { border: 0; min-width: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .seg-opt { position: relative; display: block; cursor: pointer; }
+  .seg-opt input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+  .seg-body {
+    position: relative;
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    height: 100%;
+    padding: 12px 6px;
+    background: #1a1a1a;
+    border: 1px solid #2a2a2a;
+    border-radius: 12px;
+    color: #bbb;
+    font-size: 12.5px;
+    text-align: center;
+    line-height: 1.3;
+  }
+  .seg-ico { font-size: 20px; line-height: 1; }
+  .seg-opt:hover .seg-body { border-color: #3a3a46; }
+  .seg-opt input:checked + .seg-body { border-color: #3b82f6; background: #14203a; color: #fff; }
+  .seg-opt input:checked + .seg-body::after { content: '✓'; position: absolute; top: 5px; right: 8px; font-size: 11px; color: #93c5fd; }
+  .seg-opt input:focus-visible + .seg-body { outline: 2px solid #93c5fd; outline-offset: 2px; }
+
+  /* Công tắc: núm trượt (vị trí thay đổi) + nền xanh khi bật */
+  .toggles { display: flex; flex-wrap: wrap; gap: 12px 22px; }
+  .sw-item { display: inline-flex; align-items: center; gap: 2px; }
+  .switch { position: relative; display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: #ccc; cursor: pointer; }
+  .switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+  .track { width: 34px; height: 20px; flex: none; border-radius: 20px; background: #2a2a2a; border: 1px solid #3a3a46; position: relative; transition: background 0.15s; }
+  .track::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #aaa; transition: transform 0.15s; }
+  .switch input:checked + .track { background: #3b82f6; border-color: #3b82f6; }
+  .switch input:checked + .track::after { transform: translateX(14px); background: #fff; }
+  .switch input:focus-visible + .track { outline: 2px solid #93c5fd; outline-offset: 2px; }
+  .switch input:disabled { cursor: not-allowed; }
+  .switch input:disabled + .track, .switch input:disabled ~ span { opacity: 0.65; }
+  .lock { font-size: 12px; margin-left: 4px; }
+
+  /* Tooltip ⓘ: .tip dùng position: fixed và được JS đặt toạ độ (kẹp trong khung nhìn),
+     nên không bị overflow/cột hẹp cắt mất. */
+  .tipwrap { display: inline-flex; }
+  .info {
+    background: none; border: none; cursor: pointer;
+    color: #8b93a3; font-size: 15px; line-height: 1;
+    padding: 4px 6px; border-radius: 6px;
+  }
+  .info:hover, .info[aria-expanded=true] { color: #fff; }
+  .tip {
+    display: none;
+    position: fixed; z-index: 100; left: 0; top: 0;
+    width: max-content; max-width: min(280px, calc(100vw - 16px));
+    background: #1f2430; color: #e5e7eb;
+    border: 1px solid #3b4252; border-radius: 10px;
+    padding: 9px 12px;
+    font-size: 12.5px; line-height: 1.55; font-weight: 400;
+    white-space: pre-line;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    pointer-events: none;
+  }
+  .tip.show { display: block; }
+
+  .devices { display: flex; flex-direction: column; gap: 8px; }
+  .dev {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    background: #1a1a1a;
+    border: 1px solid #2a2a2a;
+    border-radius: 12px;
+    padding: 10px 14px;
+    cursor: pointer;
+  }
+  .dev.selected { border-color: #3b82f6; background: #14203a; }
+  .dev.disabled { cursor: default; opacity: 0.7; }
+  .dev:focus-within { outline: 2px solid #93c5fd; outline-offset: 1px; }
+  .dev input { accent-color: #3b82f6; }
+  .dev .main { flex: 1 1 120px; min-width: 0; }
+  .dev .name { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dev .serial { font-size: 11px; color: #8a8a94; font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dev .hintline { font-size: 12px; color: #fbbf24; margin-top: 4px; }
+  .dev .tags { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tag { font-size: 11px; padding: 3px 10px; border-radius: 20px; font-weight: 500; white-space: nowrap; }
+  .tag.usb { background: #14532d; color: #86efac; border: 1px solid #166534; }
+  .tag.wifi { background: #1e3a5f; color: #93c5fd; border: 1px solid #1d4ed8; }
+  .tag.state-device { background: #14532d33; color: #86efac; }
+  .tag.state-bad { background: #78350f55; color: #fbbf24; }
+
+  details summary { cursor: pointer; font-size: 13px; color: #9a9aa5; }
+  details.help ol { margin: 8px 0 0 20px; font-size: 12.5px; color: #aaa; line-height: 1.8; }
+
+  /* Mục "Kết nối không dây": ít dùng nên thu gọn, nút mở dạng viền đứt */
+  details.wireless > summary {
+    list-style: none;
+    padding: 9px 12px;
+    border: 1px dashed #333;
+    border-radius: 10px;
+    color: #93c5fd;
+  }
+  details.wireless > summary::-webkit-details-marker { display: none; }
+  details.wireless > summary:hover { border-color: #3b82f6; }
+  details.wireless[open] > summary { border-style: solid; }
+  .wl-body { display: flex; flex-direction: column; gap: 14px; margin-top: 12px; }
+  .wl-body form { display: flex; flex-direction: column; gap: 6px; }
+  .wl-title { display: flex; align-items: center; gap: 2px; }
+
+  .msg { font-size: 12px; line-height: 1.6; min-height: 0; }
+  .msg.ok { color: #86efac; }
+  .msg.muted { color: #8a8a94; }
+  .msg.err { color: #fca5a5; white-space: pre-wrap; word-break: break-word; }
+  .msg:empty { display: none; }
+
+  .hints { display: flex; flex-direction: column; gap: 6px; }
+  .hints:empty { display: none; }
+  .hints div { font-size: 13px; color: #fbbf24; background: #1c1407; border: 1px solid #92400e; border-radius: 10px; padding: 10px 14px; line-height: 1.6; }
+
+  .session-line { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #aaa; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #444; flex: none; }
+  .dot.live { background: #22c55e; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  .btns { display: flex; gap: 10px; flex-wrap: wrap; }
+  .btns .btn-primary { flex: 1 1 160px; }
+  .shortcuts { background: #0d0d11; border: 1px solid #222; border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+  .shortcuts dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 14px; align-items: center; font-size: 12.5px; color: #bbb; }
+  .shortcuts dt { white-space: nowrap; }
+
+  pre#logBox {
+    margin-top: 10px;
+    max-height: 260px;
+    overflow: auto;
+    background: #0d0d11;
+    border: 1px solid #222;
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: #aaa;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  #langSelect {
+    width: auto;
+    background: #1a1a1a;
+    border: 1px solid #2a2a2a;
+    color: #999;
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="logo">
+    <div class="logo-icon">🖥️</div>
+    <div>
+      <h1 data-i18n="screen.title"></h1>
+      <div class="sub" data-i18n="screen.tagline"></div>
+    </div>
+  </div>
+  <select id="langSelect" data-i18n-aria-label="lang.label"></select>
+</header>
+
+<div class="layout">
+
+  <!-- Thiếu scrcpy/adb: nói thẳng cách cài thay vì để các nút bên dưới lỗi lần lượt -->
+  <section class="card warn full" id="missingBanner" hidden>
+    <h2 data-i18n="screen.missing.title"></h2>
+    <p class="muted" data-i18n="screen.missing.desc"></p>
+    <div><code>winget install --exact Genymobile.scrcpy</code></div>
+  </section>
+
+  <!-- Cột trái: thiết bị -->
+  <div class="col">
+    <section class="card">
+      <h2>
+        <span data-i18n="screen.devices"></span>
+        <button class="btn btn-secondary btn-small" id="refreshBtn" type="button" data-i18n="screen.devices.refresh"></button>
+      </h2>
+      <div class="devices" id="deviceList"></div>
+      <div class="msg" id="deviceMsg"></div>
+
+      <!-- Chỉ hiện khi danh sách trống (renderDevices bật/tắt) -->
+      <details class="help" id="noDeviceHelp">
+        <summary data-i18n="screen.devices.help.title"></summary>
+        <ol>
+          <li data-i18n="screen.devices.help.usb"></li>
+          <li data-i18n="screen.devices.help.cable"></li>
+          <li data-i18n="screen.devices.help.allow"></li>
+        </ol>
+      </details>
+
+      <details class="wireless">
+        <summary data-i18n="screen.wireless"></summary>
+        <div class="wl-body">
+          <form id="pairForm" role="group" aria-labelledby="pairTitle" autocomplete="off">
+            <div class="wl-title">
+              <span class="title" id="pairTitle" data-i18n="screen.pair.title"></span>
+              <span class="tipwrap">
+                <button type="button" class="info" data-i18n-aria-label="screen.info" aria-describedby="tip-wireless">ⓘ</button>
+                <span role="tooltip" id="tip-wireless" class="tip" data-i18n="screen.wireless.help"></span>
+              </span>
+            </div>
+            <div class="row compact">
+              <input type="text" id="pairHostPort" required inputmode="decimal" spellcheck="false" autocomplete="off" data-i18n-placeholder="screen.pair.hostPort" data-i18n-aria-label="screen.pair.hostPort">
+              <input type="text" id="pairCode" class="code" required inputmode="numeric" maxlength="6" pattern="\d{6}" spellcheck="false" autocomplete="off" data-i18n-placeholder="screen.pair.code" data-i18n-aria-label="screen.pair.code">
+              <button class="btn btn-secondary btn-small" type="submit" data-i18n="screen.pair.button"></button>
+            </div>
+            <div class="msg" id="pairMsg"></div>
+          </form>
+          <form id="connectForm" role="group" aria-labelledby="connectTitle" autocomplete="off">
+            <span class="title" id="connectTitle" data-i18n="screen.connect.title"></span>
+            <div class="row compact">
+              <input type="text" id="connectHostPort" required inputmode="decimal" spellcheck="false" autocomplete="off" data-i18n-placeholder="screen.connect.hostPort" data-i18n-aria-label="screen.connect.hostPort">
+              <button class="btn btn-secondary btn-small" type="submit" data-i18n="screen.connect.button"></button>
+            </div>
+            <div class="msg" id="connectMsg"></div>
+          </form>
+        </div>
+      </details>
+    </section>
+  </div>
+
+  <!-- Cột phải: chiếu gì + hành động -->
+  <div class="col">
+    <section class="card">
+      <h2 data-i18n="screen.mirror"></h2>
+
+      <fieldset class="seg">
+        <legend class="sr-only" data-i18n="screen.source"></legend>
+        <label class="seg-opt" data-i18n-title="screen.source.display.desc">
+          <input type="radio" name="source" value="display" checked>
+          <span class="seg-body"><span class="seg-ico" aria-hidden="true">📱</span><span data-i18n="screen.source.display"></span></span>
+        </label>
+        <label class="seg-opt" data-i18n-title="screen.source.app.desc">
+          <input type="radio" name="source" value="app">
+          <span class="seg-body"><span class="seg-ico" aria-hidden="true">🪟</span><span data-i18n="screen.source.app"></span></span>
+        </label>
+        <label class="seg-opt" data-i18n-title="screen.source.camera.desc">
+          <input type="radio" name="source" value="camera">
+          <span class="seg-body"><span class="seg-ico" aria-hidden="true">📷</span><span data-i18n="screen.source.camera"></span></span>
+        </label>
+      </fieldset>
+      <!-- Một dòng mô tả cho nguồn đang chọn (title chỉ hiện khi rê chuột, không dùng được trên cảm ứng) -->
+      <p class="muted" id="sourceDesc" data-i18n="screen.source.display.desc"></p>
+
+      <div class="field" id="appPicker" hidden>
+        <label class="title" for="appFilter" data-i18n="screen.app"></label>
+        <input type="text" id="appFilter" spellcheck="false" autocomplete="off" data-i18n-placeholder="screen.app.filter">
+        <select id="appSelect" size="6" data-i18n-aria-label="screen.app"></select>
+        <div class="msg ok" id="appChosen" hidden></div>
+        <div class="msg" id="appMsg"></div>
+      </div>
+
+      <div class="field" id="rotationField" hidden>
+        <div class="lbl">
+          <label class="title" for="rotation" data-i18n="screen.rotation"></label>
+          <span class="tipwrap">
+            <button type="button" class="info" data-i18n-aria-label="screen.info" aria-describedby="tip-rotation">ⓘ</button>
+            <span role="tooltip" id="tip-rotation" class="tip" data-i18n="screen.rotation.hint"></span>
+          </span>
+        </div>
+        <select id="rotation">
+          <option value="0">0°</option>
+          <option value="90" selected>90°</option>
+          <option value="180">180°</option>
+          <option value="270">270°</option>
+        </select>
+      </div>
+
+      <div class="two">
+        <div class="field">
+          <div class="lbl">
+            <label class="title" for="audio" data-i18n="screen.audio"></label>
+            <span class="tipwrap">
+              <button type="button" class="info" data-i18n-aria-label="screen.info" aria-describedby="tip-audio">ⓘ</button>
+              <span role="tooltip" id="tip-audio" class="tip" data-i18n="screen.tip.audio"></span>
+            </span>
+          </div>
+          <select id="audio">
+            <option value="off" data-i18n="screen.audio.off"></option>
+            <option value="pc" data-i18n="screen.audio.pc"></option>
+            <option value="both" id="audioBoth" data-i18n="screen.audio.both"></option>
+          </select>
+        </div>
+        <div class="field">
+          <div class="lbl">
+            <label class="title" for="quality" data-i18n="screen.quality"></label>
+            <span class="tipwrap">
+              <button type="button" class="info" data-i18n-aria-label="screen.info" aria-describedby="tip-quality">ⓘ</button>
+              <span role="tooltip" id="tip-quality" class="tip" data-i18n="screen.tip.quality"></span>
+            </span>
+          </div>
+          <select id="quality">
+            <option value="smooth" data-i18n="screen.quality.smooth"></option>
+            <option value="balanced" selected data-i18n="screen.quality.balanced"></option>
+            <option value="sharp" data-i18n="screen.quality.sharp"></option>
+          </select>
+        </div>
+      </div>
+
+      <div class="toggles">
+        <div class="sw-item">
+          <label class="switch"><input type="checkbox" role="switch" id="control"><span class="track" aria-hidden="true"></span><span data-i18n="screen.control"></span></label>
+          <span class="lock" id="controlLock" aria-hidden="true" hidden>🔒</span>
+          <span class="tipwrap">
+            <button type="button" class="info" data-i18n-aria-label="screen.info" aria-describedby="tip-control">ⓘ</button>
+            <span role="tooltip" id="tip-control" class="tip" data-i18n="screen.control.hint"></span>
+          </span>
+        </div>
+        <div class="sw-item">
+          <label class="switch"><input type="checkbox" role="switch" id="fullscreen"><span class="track" aria-hidden="true"></span><span data-i18n="screen.fullscreen"></span></label>
+        </div>
+        <div class="sw-item">
+          <label class="switch"><input type="checkbox" role="switch" id="alwaysOnTop"><span class="track" aria-hidden="true"></span><span data-i18n="screen.alwaysOnTop"></span></label>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="session-line" role="status"><div class="dot" id="sessionDot"></div><span id="sessionText"></span></div>
+      <div class="btns">
+        <button class="btn btn-primary" id="startBtn" type="button" data-i18n="screen.start"></button>
+        <button class="btn btn-danger" id="stopBtn" type="button" data-i18n="screen.stop"></button>
+        <button class="btn btn-secondary" id="shortcutsBtn" type="button" aria-expanded="false" aria-controls="shortcuts" data-i18n="screen.shortcuts"></button>
+      </div>
+      <div class="muted" id="pickHint" data-i18n="screen.pickDevice"></div>
+      <div class="msg" id="startMsg"></div>
+      <div class="hints" id="hints"></div>
+      <div class="shortcuts" id="shortcuts" hidden>
+        <div class="muted" data-i18n="screen.shortcuts.intro"></div>
+        <dl>
+          <dt><kbd>Alt</kbd> + <kbd>←</kbd> / <kbd>→</kbd></dt><dd data-i18n="screen.sc.rotate"></dd>
+          <dt><kbd>Alt</kbd> + <kbd>F</kbd></dt><dd data-i18n="screen.sc.fullscreen"></dd>
+          <dt><kbd>Alt</kbd> + <kbd>G</kbd></dt><dd data-i18n="screen.sc.actual"></dd>
+          <dt><kbd>Alt</kbd> + <kbd>W</kbd></dt><dd data-i18n="screen.sc.borders"></dd>
+          <dt><kbd>Alt</kbd> + <kbd>O</kbd></dt><dd data-i18n="screen.sc.screenOff"></dd>
+        </dl>
+      </div>
+      <details>
+        <summary data-i18n="screen.log"></summary>
+        <pre id="logBox"></pre>
+      </details>
+    </section>
+  </div>
+
+</div>
+
+<script src="/i18n.js"></script>
+<script>
+const { LANGS, t, currentLang, setLang, applyI18n } = FaceCamI18N
+const $ = (id) => document.getElementById(id)
+
+const langSelect = $('langSelect')
+for (const [code, name] of Object.entries(LANGS)) {
+  langSelect.add(new Option(name, code, false, code === currentLang()))
+}
+langSelect.addEventListener('change', () => setLang(langSelect.value))
+
+// ── Gọi API ─────────────────────────────────────────────────────────────────
+// Luôn gửi JSON cho POST: server từ chối mọi thứ khác (415) để chặn POST chéo site.
+// Origin do trình duyệt tự gắn, không cần (và không thể) set tay.
+async function api(method, url, body) {
+  let res
+  try {
+    res = await fetch(url, {
+      method,
+      cache: 'no-store',
+      headers: method === 'GET' ? {} : { 'Content-Type': 'application/json' },
+      body: method === 'GET' ? undefined : JSON.stringify(body ?? {}),
+    })
+  } catch (err) {
+    throw Object.assign(new Error(err.message), { code: 'network' })
+  }
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw Object.assign(new Error(data.message ?? res.statusText), { code: data.error ?? 'other' })
+  return data
+}
+
+// Mã lỗi từ server → câu đã dịch. Mã không có bản dịch riêng thì hiện nguyên message.
+const ERROR_KEYS = {
+  NETWORK_BLOCKED: 'screen.err.NETWORK_BLOCKED',
+  PORT_CLOSED: 'screen.err.PORT_CLOSED',
+  ADB_FAILED: 'screen.err.ADB_FAILED',
+  VALIDATION: 'screen.err.VALIDATION',
+  BUSY: 'screen.err.BUSY',
+  SCRCPY_NOT_FOUND: 'screen.err.SCRCPY_NOT_FOUND',
+  network: 'screen.err.network',
+}
+function errorText(err) {
+  return t(ERROR_KEYS[err.code] ?? 'screen.err.other', { msg: err.message })
+}
+
+function setMsg(el, kind, text) {
+  el.className = `msg ${kind}`
+  el.textContent = text
+}
+
+// Đổi khoá i18n của một phần tử động (chú thích nguồn, tooltip điều khiển) rồi dịch ngay;
+// giữ data-i18n cập nhật để đổi ngôn ngữ sau đó vẫn dịch đúng khoá hiện tại
+function setI18nKey(el, key) {
+  el.dataset.i18n = key
+  el.textContent = t(key)
+}
+
+// ── Tooltip ⓘ ───────────────────────────────────────────────────────────────
+// Hiện khi rê chuột / focus bàn phím; bấm (hoặc chạm trên cảm ứng) để "ghim", bấm lại,
+// bấm ra ngoài hoặc Escape để đóng. Toạ độ tính bằng JS và kẹp trong khung nhìn.
+let openTip = null    // { btn, tip, pinned }
+
+function placeTip(btn, tip) {
+  const margin = 8
+  const b = btn.getBoundingClientRect()
+  const w = tip.offsetWidth
+  const h = tip.offsetHeight
+  const left = Math.max(margin, Math.min(b.left, window.innerWidth - w - margin))
+  // Mặc định hiện phía dưới biểu tượng; hết chỗ mà phía trên còn chỗ thì lật lên
+  let top = b.bottom + 6
+  if (top + h > window.innerHeight - margin && b.top - 6 - h >= margin) top = b.top - 6 - h
+  tip.style.left = `${left}px`
+  tip.style.top = `${top}px`
+}
+
+function hideTip() {
+  if (!openTip) return
+  openTip.tip.classList.remove('show')
+  openTip.btn.removeAttribute('aria-expanded')
+  openTip = null
+}
+
+function showTip(btn, pinned) {
+  hideTip()
+  const tip = $(btn.getAttribute('aria-describedby'))
+  if (!tip) return
+  tip.classList.add('show')    // phải hiện trước mới đo được kích thước
+  placeTip(btn, tip)
+  btn.setAttribute('aria-expanded', 'true')
+  openTip = { btn, tip, pinned }
+}
+
+document.addEventListener('mouseover', (e) => {
+  const btn = e.target.closest('.info')
+  if (btn && !openTip?.pinned) showTip(btn, false)
+})
+document.addEventListener('mouseout', (e) => {
+  const btn = e.target.closest('.info')
+  if (btn && openTip?.btn === btn && !openTip.pinned) hideTip()
+})
+document.addEventListener('focusin', (e) => {
+  const btn = e.target.closest?.('.info')
+  // Chỉ khi focus bằng bàn phím: bấm chuột cũng gây focus, nhưng đã có luồng click lo
+  if (btn && btn.matches(':focus-visible') && !openTip?.pinned) showTip(btn, false)
+})
+document.addEventListener('focusout', (e) => {
+  if (openTip && e.target === openTip.btn) hideTip()
+})
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('.info')
+  if (!btn) { hideTip(); return }
+  if (openTip?.btn === btn && openTip.pinned) hideTip()
+  else showTip(btn, true)
+})
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideTip() })
+// Cuộn hoặc đổi cỡ cửa sổ làm toạ độ cũ sai → đóng cho gọn thay vì tính lại
+window.addEventListener('resize', hideTip)
+window.addEventListener('scroll', hideTip, true)
+
+// ── Tuỳ chọn (nhớ lại giữa các lần mở) ──────────────────────────────────────
+const OPT_KEY = 'fc_screen_opts'
+const SOURCES = ['display', 'app', 'camera']
+const sourceEls = [...document.querySelectorAll('input[name=source]')]
+// `source` là nhóm radio nên không nằm trong optEls (mỗi phần tử một giá trị)
+const optEls = {
+  audio: $('audio'), quality: $('quality'), rotation: $('rotation'),
+  control: $('control'), fullscreen: $('fullscreen'), alwaysOnTop: $('alwaysOnTop'),
+}
+let selectedPkg = null
+// Lựa chọn điều khiển của người dùng, giữ lại trong lúc nguồn "app" ép bật điều khiển
+let controlPref = null
+let selectedSerial = null
+
+function getSource() {
+  return sourceEls.find(el => el.checked)?.value ?? 'display'
+}
+
+function setSource(value) {
+  for (const el of sourceEls) el.checked = el.value === value
+}
+
+function saveOptions() {
+  const data = { selectedPkg, source: getSource() }
+  for (const [key, el] of Object.entries(optEls)) data[key] = el.type === 'checkbox' ? el.checked : el.value
+  // Đang bị ép bật (nguồn app) thì nhớ lựa chọn thật, không nhớ trạng thái bị ép
+  if (optEls.control.disabled && controlPref !== null) data.control = controlPref
+  try {
+    localStorage.setItem(OPT_KEY, JSON.stringify(data))
+  } catch { /* localStorage bị chặn (private mode) — chỉ mất việc nhớ tuỳ chọn */ }
+}
+
+function loadOptions() {
+  let data = null
+  try {
+    data = JSON.parse(localStorage.getItem(OPT_KEY))
+  } catch { /* JSON hỏng hoặc không đọc được → dùng mặc định trong HTML */ }
+  if (!data || typeof data !== 'object') return
+  // Giá trị lưu từ phiên bản cũ (hồi còn là <select>) vẫn khôi phục được
+  if (SOURCES.includes(data.source)) setSource(data.source)
+  for (const [key, el] of Object.entries(optEls)) {
+    if (!(key in data)) continue
+    if (el.type === 'checkbox') el.checked = Boolean(data[key])
+    // Giá trị lưu từ phiên bản cũ có thể không còn trong <select>: gán sai sẽ làm select trống
+    else if ([...el.options].some(o => o.value === data[key])) el.value = data[key]
+  }
+  if (typeof data.selectedPkg === 'string') selectedPkg = data.selectedPkg
+}
+
+// ── Thiết bị ────────────────────────────────────────────────────────────────
+let lastDevicesKey = ''
+let devices = []
+
+function stateLabel(state) {
+  if (state === 'device') return t('screen.state.device')
+  if (state === 'unauthorized') return t('screen.state.unauthorized')
+  if (state === 'offline') return t('screen.state.offline')
+  return t('screen.state.other', { state })
+}
+
+function stateHint(state) {
+  if (state === 'unauthorized') return t('screen.stateHint.unauthorized')
+  if (state === 'offline') return t('screen.stateHint.offline')
+  return ''
+}
+
+function renderDevices() {
+  const list = $('deviceList')
+  list.replaceChildren()
+  // Checklist "Chưa thấy máy?" chỉ có ích khi danh sách trống
+  $('noDeviceHelp').hidden = devices.length > 0
+  if (!devices.length) {
+    const empty = document.createElement('p')
+    empty.className = 'muted'
+    empty.textContent = t('screen.devices.empty')
+    list.appendChild(empty)
+    return
+  }
+  for (const d of devices) {
+    const ready = d.state === 'device'
+    const row = document.createElement('label')
+    row.className = `dev${d.serial === selectedSerial ? ' selected' : ''}${ready ? '' : ' disabled'}`
+
+    const radio = document.createElement('input')
+    radio.type = 'radio'
+    radio.name = 'device'
+    radio.checked = d.serial === selectedSerial
+    radio.disabled = !ready
+    radio.addEventListener('change', () => selectDevice(d.serial))
+
+    // Tên máy, serial và hint đều do thiết bị cung cấp → chỉ dùng textContent
+    const main = document.createElement('div')
+    main.className = 'main'
+    const name = document.createElement('div')
+    name.className = 'name'
+    name.textContent = (d.model ?? d.serial).replace(/_/g, ' ')
+    const serial = document.createElement('div')
+    serial.className = 'serial'
+    serial.textContent = d.serial
+    main.append(name, serial)
+    const hint = stateHint(d.state)
+    if (hint) {
+      const h = document.createElement('div')
+      h.className = 'hintline'
+      h.textContent = hint
+      main.appendChild(h)
+    }
+
+    const transport = document.createElement('span')
+    transport.className = `tag ${d.transport}`
+    transport.textContent = d.transport === 'wifi' ? t('screen.wifi') : t('screen.usb')
+    const state = document.createElement('span')
+    state.className = `tag ${ready ? 'state-device' : 'state-bad'}`
+    state.textContent = stateLabel(d.state)
+    // Gói 2 nhãn vào một khối để màn hẹp tự xuống dòng cả cụm
+    const tags = document.createElement('span')
+    tags.className = 'tags'
+    tags.append(transport, state)
+
+    row.append(radio, main, tags)
+    list.appendChild(row)
+  }
+}
+
+function selectDevice(serial) {
+  selectedSerial = serial
+  renderDevices()
+  syncAppPicker()
+  updateButtons()
+}
+
+async function refreshDevices() {
+  try {
+    const { devices: list } = await api('GET', '/api/screen/devices')
+    devices = list
+    $('deviceMsg').className = 'msg'
+    $('deviceMsg').textContent = ''
+  } catch (err) {
+    setMsg($('deviceMsg'), 'err', t('screen.devices.failed', { msg: errorText(err) }))
+    return
+  }
+  const ready = devices.filter(d => d.state === 'device')
+  // Thiết bị đang chọn biến mất thì bỏ chọn; chỉ có đúng một máy sẵn sàng thì chọn luôn
+  if (!ready.some(d => d.serial === selectedSerial)) {
+    selectedSerial = ready.length === 1 ? ready[0].serial : null
+    syncAppPicker()
+  }
+  // Chỉ vẽ lại khi dữ liệu đổi: vẽ lại mỗi 3s làm mất hover/focus vô ích
+  const key = JSON.stringify([devices, selectedSerial])
+  if (key !== lastDevicesKey) {
+    lastDevicesKey = key
+    renderDevices()
+  }
+  updateButtons()
+}
+
+// ── Ứng dụng (chỉ khi nguồn = app) ──────────────────────────────────────────
+let apps = []
+let appsSerial = null      // serial mà `apps` đã tải cho
+let appsLoading = false
+
+function renderApps() {
+  const select = $('appSelect')
+  const needle = $('appFilter').value.trim().toLowerCase()
+  select.replaceChildren()
+  const shown = apps.filter(a => !needle || a.name.toLowerCase().includes(needle) || a.pkg.toLowerCase().includes(needle))
+  for (const a of shown) {
+    const opt = document.createElement('option')
+    opt.value = a.pkg
+    // Tên app do thiết bị cung cấp → textContent (Option.text cũng không parse HTML)
+    opt.textContent = a.system ? `${a.name} (${t('screen.app.system')})` : a.name
+    opt.selected = a.pkg === selectedPkg
+    select.appendChild(opt)
+  }
+  renderChosenApp()
+  if (appsSerial && !appsLoading && !shown.length) setMsg($('appMsg'), 'muted', t('screen.app.empty'))
+  else if (!appsLoading) setMsg($('appMsg'), '', '')
+}
+
+// Danh sách dạng hộp (size=6) không tự đóng như dropdown → cần một dòng xác nhận rõ ràng
+function renderChosenApp() {
+  const chosen = apps.find(a => a.pkg === selectedPkg)
+  $('appChosen').hidden = !chosen
+  // Tên app do thiết bị cung cấp → textContent
+  if (chosen) $('appChosen').textContent = t('screen.app.chosen', { name: chosen.name })
+}
+
+async function loadApps(serial) {
+  appsLoading = true
+  appsSerial = serial
+  apps = []
+  renderApps()
+  setMsg($('appMsg'), 'muted', t('screen.app.loading'))
+  try {
+    const data = await api('GET', `/api/screen/apps?serial=${encodeURIComponent(serial)}`)
+    // Người dùng đã đổi máy trong lúc chờ → bỏ kết quả cũ, kẻo hiện app của máy khác
+    if (appsSerial !== serial) return
+    apps = data.apps
+    appsLoading = false
+    renderApps()
+  } catch (err) {
+    if (appsSerial !== serial) return
+    appsLoading = false
+    // Cho phép thử lại lần sau thay vì kẹt ở trạng thái lỗi
+    appsSerial = null
+    setMsg($('appMsg'), 'err', t('screen.app.failed', { msg: errorText(err) }))
+  }
+}
+
+function syncAppPicker() {
+  const isApp = getSource() === 'app'
+  $('appPicker').hidden = !isApp
+  if (!isApp) return
+  if (!selectedSerial) {
+    apps = []
+    appsSerial = null
+    appsLoading = false
+    renderApps()
+    setMsg($('appMsg'), 'muted', t('screen.app.needDevice'))
+  } else if (appsSerial !== selectedSerial && !appsLoading) {
+    loadApps(selectedSerial)
+  }
+}
+
+// ── Tuỳ chọn phụ thuộc nhau ─────────────────────────────────────────────────
+function syncOptionDeps() {
+  const source = getSource()
+  const camera = source === 'camera'
+  // Camera không có luồng playback để nhân đôi
+  $('audioBoth').disabled = camera
+  if (camera && optEls.audio.value === 'both') optEls.audio.value = 'pc'
+  $('rotationField').hidden = !camera
+  setI18nKey($('sourceDesc'), `screen.source.${source}.desc`)
+
+  // Nguồn app bắt buộc điều khiển (xem buildArgs) → ép bật và khoá ô, trả lại lựa
+  // chọn cũ khi đổi sang nguồn khác
+  const app = source === 'app'
+  if (app && !optEls.control.disabled) {
+    controlPref = optEls.control.checked
+    optEls.control.checked = true
+  } else if (!app && optEls.control.disabled && controlPref !== null) {
+    optEls.control.checked = controlPref
+  }
+  optEls.control.disabled = app
+  // Lý do khoá nằm trong tooltip thay vì một đoạn chữ in sẵn
+  $('controlLock').hidden = !app
+  setI18nKey($('tip-control'), app ? 'screen.control.appRequired' : 'screen.control.hint')
+}
+
+function collectOptions() {
+  return {
+    serial: selectedSerial,
+    source: getSource(),
+    pkg: selectedPkg,
+    audio: optEls.audio.value,
+    control: optEls.control.checked,
+    rotation: Number(optEls.rotation.value),
+    quality: optEls.quality.value,
+    fullscreen: optEls.fullscreen.checked,
+    alwaysOnTop: optEls.alwaysOnTop.checked,
+  }
+}
+
+// ── Phiên ───────────────────────────────────────────────────────────────────
+let session = null
+let available = { scrcpy: true, adb: true }
+let lastLogKey = ''
+
+function updateButtons() {
+  const running = Boolean(session?.running)
+  const needsPkg = getSource() === 'app' && !selectedPkg
+  $('startBtn').disabled = running || !selectedSerial || needsPkg || !available.scrcpy
+  $('stopBtn').disabled = !running
+  // Gợi ý chọn máy nằm ở dòng riêng để không đè lên thông báo lỗi của lần bấm Start
+  $('pickHint').hidden = running || Boolean(selectedSerial)
+}
+
+function renderSession() {
+  const s = session
+  const running = Boolean(s?.running)
+  $('sessionDot').className = `dot${running ? ' live' : ''}`
+  if (running) $('sessionText').textContent = t('screen.session.running', { serial: s.serial })
+  else if (s?.startedAt) {
+    $('sessionText').textContent = s.exitCode === null ? t('screen.session.stopped') : t('screen.session.exited', { code: s.exitCode })
+  } else $('sessionText').textContent = t('screen.session.idle')
+
+  const hints = $('hints')
+  hints.replaceChildren()
+  for (const h of s?.hints ?? []) {
+    const key = `screen.hint.${h}`
+    const text = t(key)
+    if (text === key) continue    // gợi ý server biết mà giao diện chưa có bản dịch
+    const div = document.createElement('div')
+    div.textContent = text
+    hints.appendChild(div)
+  }
+
+  // Chỉ ghi lại log khi đổi: đang đọc/cuộn mà bị ghi đè mỗi 3s thì không đọc nổi
+  const logKey = JSON.stringify(s?.log ?? [])
+  if (logKey !== lastLogKey) {
+    lastLogKey = logKey
+    const box = $('logBox')
+    const stick = box.scrollTop + box.clientHeight >= box.scrollHeight - 8
+    box.textContent = (s?.log ?? []).map(e => (e.count > 1 ? `${e.text}  (x${e.count})` : e.text)).join('\n') || t('screen.log.empty')
+    if (stick) box.scrollTop = box.scrollHeight
+  }
+  updateButtons()
+}
+
+async function refreshStatus() {
+  try {
+    const data = await api('GET', '/api/screen/status')
+    available = data.available
+    session = data.session
+    $('missingBanner').hidden = available.scrcpy && available.adb
+    renderSession()
+  } catch (err) {
+    // Server điều khiển tắt hoặc mạng rớt: giữ nguyên màn hình cũ, vòng sau thử lại
+    console.warn('Không đọc được trạng thái:', err.message)
+  }
+}
+
+async function tick() {
+  await refreshStatus()
+  if (available.adb) await refreshDevices()
+}
+
+$('startBtn').addEventListener('click', async () => {
+  $('startBtn').disabled = true
+  setMsg($('startMsg'), 'muted', t('screen.working'))
+  try {
+    const data = await api('POST', '/api/screen/start', { options: collectOptions() })
+    session = data.session
+    $('startMsg').textContent = ''
+  } catch (err) {
+    setMsg($('startMsg'), 'err', errorText(err))
+  }
+  renderSession()
+})
+
+$('stopBtn').addEventListener('click', async () => {
+  $('stopBtn').disabled = true
+  try {
+    const data = await api('POST', '/api/screen/stop', {})
+    session = data.session
+  } catch (err) {
+    setMsg($('startMsg'), 'err', errorText(err))
+  }
+  renderSession()
+})
+
+$('refreshBtn').addEventListener('click', tick)
+
+$('shortcutsBtn').addEventListener('click', () => {
+  const panel = $('shortcuts')
+  panel.hidden = !panel.hidden
+  $('shortcutsBtn').setAttribute('aria-expanded', String(!panel.hidden))
+})
+
+// ── Không dây ───────────────────────────────────────────────────────────────
+function wireForm(formId, msgId, okKey, send) {
+  const form = $(formId)
+  const msg = $(msgId)
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault()
+    const button = form.querySelector('button[type=submit]')
+    button.disabled = true
+    setMsg(msg, 'muted', t('screen.working'))
+    try {
+      await send()
+      setMsg(msg, 'ok', t(okKey))
+      refreshDevices()
+    } catch (err) {
+      // ADB_FAILED hiện nguyên văn output của adb (qua {msg}) để còn tra cứu được
+      setMsg(msg, 'err', errorText(err))
+    } finally {
+      button.disabled = false
+    }
+  })
+}
+wireForm('pairForm', 'pairMsg', 'screen.pair.ok', () =>
+  api('POST', '/api/screen/pair', { hostPort: $('pairHostPort').value.trim(), code: $('pairCode').value.trim() }))
+wireForm('connectForm', 'connectMsg', 'screen.connect.ok', () =>
+  api('POST', '/api/screen/connect', { hostPort: $('connectHostPort').value.trim() }))
+
+// ── Sự kiện tuỳ chọn ────────────────────────────────────────────────────────
+for (const el of [...Object.values(optEls), ...sourceEls]) {
+  el.addEventListener('change', () => {
+    syncOptionDeps()
+    syncAppPicker()
+    saveOptions()
+    updateButtons()
+  })
+}
+$('appFilter').addEventListener('input', renderApps)
+$('appSelect').addEventListener('change', () => {
+  selectedPkg = $('appSelect').value || null
+  renderChosenApp()
+  saveOptions()
+  updateButtons()
+})
+
+// Đổi ngôn ngữ: phần dựng bằng JS phải vẽ lại bằng chuỗi mới
+window.addEventListener('fc:langchange', () => {
+  renderDevices()
+  renderSession()
+  if (!$('appPicker').hidden) renderApps()
+})
+
+// Chỉ tự làm mới khi tab đang hiển thị: tab nền gọi adb mỗi 3s là phí tiến trình vô ích
+setInterval(() => { if (document.visibilityState === 'visible') tick() }, 3000)
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') tick() })
+
+loadOptions()
+applyI18n()
+syncOptionDeps()
+syncAppPicker()
+renderSession()
+tick()
+</script>
+</body>
+</html>

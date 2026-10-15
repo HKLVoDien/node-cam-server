@@ -85,6 +85,7 @@
   }
   .usb .card-icon { background: #14532d33; }
   .wifi .card-icon { background: #1e3a5f33; }
+  .screen .card-icon { background: #4c1d9533; }
 
   .badge {
     font-size: 11px;
@@ -94,6 +95,7 @@
   }
   .usb .badge { background: #14532d; color: #86efac; border: 1px solid #166534; }
   .wifi .badge { background: #1e3a5f; color: #93c5fd; border: 1px solid #1d4ed8; }
+  .screen .badge { background: #3b1d6e; color: #c4b5fd; border: 1px solid #6d28d9; }
 
   .qr-wrap {
     background: #fff;
@@ -140,6 +142,8 @@
   }
   .usb .hint-dot { background: #22c55e; }
   .wifi .hint-dot { background: #3b82f6; }
+  .screen .hint-dot { background: #8b5cf6; }
+  .screen-desc { font-size: 12px; color: #777; text-align: center; max-width: 200px; line-height: 1.7; }
 
   .actions {
     display: flex;
@@ -240,6 +244,23 @@
     <select id="ipSelect" style="display:none"></select>
     <div class="hint"><div class="hint-dot"></div> <span data-i18n="home.wifi.hint">Chấp nhận cảnh báo cert lần đầu</span></div>
   </div>
+
+  <!-- Chỉ hiện khi mở trang từ chính PC chạy server: server scrcpy chỉ nghe 127.0.0.1 nên
+       từ điện thoại hay máy khác trong LAN bấm vào cũng không tới được -->
+  <div class="card screen" id="screenCard" style="display:none">
+    <div class="card-header">
+      <div class="card-title">
+        <div class="card-icon">🖥️</div>
+        <span data-i18n="home.screen">Màn hình điện thoại</span>
+      </div>
+      <span class="badge" data-i18n="home.screen.badge">Chỉ PC này</span>
+    </div>
+    <p class="screen-desc" data-i18n="home.screen.desc">Chiếu và điều khiển màn hình điện thoại bằng scrcpy.</p>
+    <a class="btn btn-primary" id="screenLink" href="#" target="_blank" rel="noopener">
+      <span data-i18n="home.screen.open">Mở bảng điều khiển</span>
+    </a>
+    <div class="hint"><div class="hint-dot"></div> <span data-i18n="home.screen.hint">Cần cáp USB hoặc ADB không dây</span></div>
+  </div>
 </div>
 
 <div class="actions">
@@ -292,9 +313,19 @@ function buildIpPicker(ips, current) {
   ipSelect.style.display = ''
 }
 
+// Link ghi cứng 127.0.0.1 chứ không dùng localhost: server scrcpy chỉ bind IPv4 loopback,
+// còn localhost có thể phân giải ra ::1 trước và không kết nối được
+function showScreenCard(screenPort) {
+  const isLocal = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)
+  if (!isLocal || !screenPort) return
+  document.getElementById('screenLink').href = `http://127.0.0.1:${screenPort}/`
+  document.getElementById('screenCard').style.display = ''
+}
+
 fetch('/api/urls').then(r => r.json()).then(data => {
   render(data)
   buildIpPicker(data.ips, data.ip)
+  showScreenCard(data.screenPort)
 })
 
 ipSelect.addEventListener('change', () => {

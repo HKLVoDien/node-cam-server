@@ -3,7 +3,7 @@
  *   mục dữ liệu tạm, và một client Socket.IO tối giản nói protocol v4 thẳng qua
  *   WebSocket. Không thêm dependency nào (socket.io-client, supertest…).
  * Author: DienJVo
- * Version: 1.0.0
+ * Version: 1.1.0
  */
 const { spawn } = require('child_process')
 const fs = require('fs')
@@ -37,11 +37,15 @@ function freePort() {
  * Dữ liệu (config.json, .token, cert.pem) trỏ vào thư mục tạm qua
  * FACECAM_DATA_DIR — chạy test không được đụng tới file thật của người dùng.
  *
- * @returns {Promise<{port, httpsPort, url, token, dataDir, stop}>}
+ * SCREEN_PORT cũng được cấp một port trống riêng (cùng lý do với PORT: 0 sẽ rơi về
+ * 7071 mặc định), và caller có thể đè bằng `env` — ví dụ để chiếm sẵn port này.
+ *
+ * @returns {Promise<{port, httpsPort, screenPort, url, token, dataDir, stop}>}
  */
 async function startServer({ dataDir, env = {} } = {}) {
   const port = await freePort()
   const httpsPort = await freePort()
+  const screenPort = Number(env.SCREEN_PORT) || await freePort()
   // Dùng lại thư mục có sẵn khi test cần khởi động lại trên đúng dữ liệu cũ;
   // thư mục đó thuộc về người gọi nên stop() không được xoá.
   const reused = Boolean(dataDir)
@@ -49,7 +53,7 @@ async function startServer({ dataDir, env = {} } = {}) {
 
   const proc = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
     cwd: ROOT,
-    env: { ...process.env, PORT: String(port), HTTPS_PORT: String(httpsPort), FACECAM_DATA_DIR: dir, ...env },
+    env: { ...process.env, PORT: String(port), HTTPS_PORT: String(httpsPort), SCREEN_PORT: String(screenPort), FACECAM_DATA_DIR: dir, ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
 
@@ -85,7 +89,7 @@ async function startServer({ dataDir, env = {} } = {}) {
     const token = fs.readFileSync(path.join(dir, '.token'), 'utf8').trim()
 
     return {
-      port, httpsPort, token, dataDir: dir,
+      port, httpsPort, screenPort, token, dataDir: dir,
       url: `http://127.0.0.1:${port}`,
       logs: () => logs.join(''),
       async stop() {
