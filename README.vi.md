@@ -156,6 +156,7 @@ Server listen trên `0.0.0.0`, nên nếu không có lớp này thì **bất k�
 - Terminal cũng in sẵn link `viewer.html` kèm token để mở trên thiết bị LAN khác.
 - Vào nhầm mà thiếu token thì **không phải ngõ cụt**: trang 401 có ô nhập token, gõ vào là vào thẳng trang bạn định mở. Trang này tự chọn tiếng Việt hay tiếng Anh theo `Accept-Language` của trình duyệt.
 - **Đổi token:** xoá file `.token` rồi khởi động lại server. Nhớ quét lại QR trên phone.
+- Miễn token cho localhost còn đòi header `Host` phải là tên loopback (`localhost`, `127.0.0.1` hoặc `[::1]`). Nhờ vậy trang web độc hại không lọt vào được bằng DNS rebinding — request kiểu đó bị coi như thiết bị LAN khác và phải có token.
 
 ---
 

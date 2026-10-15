@@ -150,6 +150,7 @@ Both servers listen on `0.0.0.0`, so without this layer **anyone on your LAN cou
 - The terminal also prints a `viewer.html` link with the token, for opening on another LAN device.
 - Arriving without a token is **not a dead end**: the 401 page has a token field, and submitting it takes you straight to the page you wanted. It picks English or Vietnamese from your browser's `Accept-Language`.
 - **Rotating the token:** delete `.token` and restart. Remember to re-scan the QR code on the phone.
+- The localhost exemption also requires a loopback `Host` header (`localhost`, `127.0.0.1` or `[::1]`). This stops a malicious website from reaching the server through DNS rebinding — such requests are treated like any other LAN device and need the token.
 
 ---
 
