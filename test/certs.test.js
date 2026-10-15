@@ -3,7 +3,7 @@
  *   đổi, ký lại khi IP đổi / cert hỏng / sắp hết hạn. Chạy trên thư mục tạm nên
  *   không đụng cert thật.
  * Author: DienJVo
- * Version: 1.0.0
+ * Version: 1.0.1
  */
 const { test, describe, before, after } = require('node:test')
 const assert = require('node:assert')
@@ -103,10 +103,16 @@ describe('whyRegenerate', () => {
   }
 
   test('helper trên thật sự đổi được hạn (không dính cache của forge)', () => {
-    const want = Date.now() + 5 * 86400000
+    // Kẹp kết quả giữa hai mốc trước/sau thay vì so với một mốc: helper tự gọi
+    // Date.now() SAU khi sinh khoá RSA (~100ms), nên so với mốc lấy trước đó sẽ lệch
+    // 1 giây mỗi khi khoảng chờ đó vắt qua ranh giới giây → test chập chờn.
+    const earliest = Date.now() + 5 * 86400000
     const got = forge.pki.certificateFromPem(certExpiringIn(5)).validity.notAfter.getTime()
+    const latest = Date.now() + 5 * 86400000
     // X.509 lưu thời gian chính xác tới giây — bỏ mili-giây khi so sánh
-    assert.strictEqual(Math.floor(got / 1000), Math.floor(want / 1000))
+    const sec = Math.floor(got / 1000)
+    assert.ok(sec >= Math.floor(earliest / 1000) && sec <= Math.floor(latest / 1000),
+      `hạn ${new Date(got).toISOString()} nằm ngoài khoảng mong đợi`)
   })
 
   test('còn dưới ngưỡng 30 ngày thì ký lại', () => {
