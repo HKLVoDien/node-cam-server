@@ -3,7 +3,7 @@
            open-source project other people can install, with the reasoning behind
            each foundational decision.
   Author: DienJVo
-  Version: 1.0.0
+  Version: 1.1.0
 -->
 
 # Roadmap
@@ -86,6 +86,14 @@ The key pair comes from `crypto.generateKeyPairSync` (native) rather than node-f
 Re-signing also triggers when the certificate is unreadable, or has fewer than 30 days left (waiting for the actual expiry means the browser blocks outright rather than merely warning).
 
 **Deliberately not building a private CA.** It was considered: a per-machine CA signing leaf certificates is the only way to eliminate the warning screen entirely. But it requires installing the CA on the phone — five steps buried in Android's Settings plus a mandatory screen lock PIN, or on iOS installing a profile *and then* flipping a separate switch in a completely different place (`General → About → Certificate Trust Settings`), a step that is very easily missed. Too much friction for the payoff, and it still wouldn't make WiFi mode usable for a general audience — USB mode is that path. Should this ever be built, the CA **must** be generated per machine: shipping a shared CA in a release is a serious vulnerability (Lenovo Superfish, Dell eDellRoot).
+
+### Off-roadmap — Phone screen mirroring via scrcpy (2026-10-15)
+
+Done: a control page at `127.0.0.1:7071` (`scrcpy.js`, `screen-control.js`, `public/screen.html`), Android only.
+
+- **Why scrcpy rather than a custom Android app:** mobile browsers have no reliable `getDisplayMedia`, so `phone.html` cannot capture the screen. scrcpy is open source, runs locally over adb and never touches the cloud — consistent with section 2.
+- **Later:** auto-connect via mDNS plus QR pairing (needs testing on a network without client isolation); direct recording with `--record` (original resolution, no re-encode). When Phase 1 embeds adb, consider shipping scrcpy (Apache 2.0) too so both features share one adb.
+- **Not doing:** auto-rotating scrcpy's camera (scrcpy sends raw sensor frames — use webcam mode for automatic rotation); rendering scrcpy inside the browser (would mean speaking scrcpy-server's protocol ourselves, which breaks across versions).
 
 ### Phase 1 — A single executable
 

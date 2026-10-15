@@ -170,6 +170,32 @@ Server listen trên `0.0.0.0`, nên nếu không có lớp này thì **bất k�
 3. Bấm **Bắt đầu máy quay ảo**
 4. Discord/Zoom → Settings → Camera → chọn **OBS Virtual Camera**
 
+## Chiếu màn hình điện thoại (scrcpy)
+
+Chiếu **màn hình**, **một ứng dụng** hoặc **camera** của điện thoại lên PC bằng [scrcpy](https://github.com/Genymobile/scrcpy), điều khiển từ một trang web cục bộ thay vì gõ lệnh. Chỉ hỗ trợ Android.
+
+**Yêu cầu**
+- Đã cài scrcpy (có kèm adb). Windows: `winget install --exact Genymobile.scrcpy`. Server tự tìm trong `PATH`, hoặc trỏ `FACECAM_SCRCPY` / `FACECAM_ADB` tới file chạy.
+- Điện thoại bật **Gỡ lỗi USB**. Có tiếng cần Android 11+; tiếng phát "cả PC và điện thoại" cần Android 13+.
+- Máy Xiaomi / Redmi / POCO: muốn điều khiển từ PC thì bật thêm **Gỡ lỗi USB (Cài đặt bảo mật)** rồi khởi động lại máy.
+
+**Cách dùng**
+1. `npm start`, rồi bấm thẻ **Màn hình điện thoại** trên trang chủ (mở `http://127.0.0.1:7071`).
+2. Chọn máy, chọn nguồn hình, bấm **Bắt đầu chiếu**. scrcpy mở một cửa sổ riêng.
+
+| Nguồn | Ghi chú |
+|---|---|
+| Toàn màn hình | Tự xoay theo điện thoại |
+| Một ứng dụng | Chạy trên màn hình ảo: app rời khỏi màn hình điện thoại và được thao tác từ PC, nên luôn bật điều khiển |
+| Camera | Khung gốc của cảm biến — **không** xoay theo cách cầm máy, phải chọn góc bằng tay. Cần tự xoay và bộ lọc hình thì dùng chế độ webcam |
+
+- **Chất lượng được áp ngay trên điện thoại** (giới hạn độ phân giải + bitrate); kéo to cửa sổ scrcpy không làm hình nét hơn. scrcpy không tự giảm chất lượng theo đường truyền — WiFi giật thì chọn *Mượt*.
+- **Không dây:** ghép đôi một lần ở mục **＋ Kết nối không dây**. WiFi công cộng / WiFi khách thường cách ly các thiết bị với nhau nên ghép đôi sẽ hết thời gian chờ — dùng cáp USB.
+- **Phím tắt cửa sổ scrcpy** (bấm vào cửa sổ trước): Alt+←/→ xoay, Alt+F toàn màn hình, Alt+G kích thước gốc, Alt+W bỏ viền đen, Alt+O tắt màn hình điện thoại.
+- **OBS:** thêm **Window Capture** chọn `[scrcpy.exe]: FaceCam Screen`, phương thức chụp *Windows 10 (1903 and up)*. OBS chụp cửa sổ đúng kích thước đang hiển thị, nên để cửa sổ càng to càng tốt (toàn màn hình).
+
+**Bảo mật.** Trang điều khiển chạy được adb/scrcpy trên máy nên chỉ nghe ở **127.0.0.1**, trên port riêng — không dùng 7070 vì lưu lượng `adb reverse` cũng đến dưới dạng localhost. Mọi request phải có `Host` là tên loopback, request thay đổi trạng thái phải đến từ chính trang đó (kiểm `Origin` / `Sec-Fetch-Site`, chỉ nhận JSON). Port 7071 bận thì server chỉ cảnh báo, webcam vẫn chạy.
+
 ---
 
 ## Cấu hình `config.json`
@@ -450,6 +476,11 @@ adb shell dumpsys window windows | findstr mAlertWindowSurfaces
 
 ## Changelog
 
+### 2026-10-15
+
+**Tính năng mới**
+- **Chiếu màn hình điện thoại qua scrcpy** — trang điều khiển ở `127.0.0.1:7071`: chọn máy, chiếu toàn màn hình / một ứng dụng / camera, ghép đôi và kết nối không dây, tuỳ chọn tiếng, chất lượng, xoay hình camera. Xem mục *Chiếu màn hình điện thoại*
+
 ### 2026-07-28 (chiều)
 
 **Tính năng mới**
@@ -529,6 +560,7 @@ adb shell dumpsys window windows | findstr mAlertWindowSurfaces
 |---|---|---|
 | 7070 | HTTP | USB mode, Viewer PC |
 | 7443 | HTTPS | WiFi mode |
+| 7071 | HTTP, chỉ 127.0.0.1 | Trang điều khiển chiếu màn hình (scrcpy) |
 
 ---
 

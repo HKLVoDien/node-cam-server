@@ -164,6 +164,32 @@ Both servers listen on `0.0.0.0`, so without this layer **anyone on your LAN cou
 3. Click **Start Virtual Camera**
 4. Discord/Zoom → Settings → Camera → pick **OBS Virtual Camera**
 
+## Phone screen mirroring (scrcpy)
+
+Mirror the phone's **screen**, **a single app** or its **camera** to the PC with [scrcpy](https://github.com/Genymobile/scrcpy), driven from a local web page instead of the command line. Android only.
+
+**Requirements**
+- scrcpy installed (it bundles adb). Windows: `winget install --exact Genymobile.scrcpy`. The server finds it on `PATH`, or point `FACECAM_SCRCPY` / `FACECAM_ADB` at the executables.
+- **USB debugging** enabled on the phone. Audio needs Android 11+; "PC and phone" audio needs Android 13+.
+- Xiaomi / Redmi / POCO: to control the phone from the PC, also enable **USB debugging (Security settings)** and reboot.
+
+**Using it**
+1. `npm start`, then click the **Phone screen** card on the home page (opens `http://127.0.0.1:7071`).
+2. Pick the device, choose what to mirror, press **Start mirroring**. scrcpy opens its own window.
+
+| Source | Notes |
+|---|---|
+| Whole screen | Follows the phone's rotation |
+| One app | Runs on a virtual display: the app leaves the phone screen and is operated from the PC, so control is always on |
+| Camera | Raw sensor frames — does **not** follow how you hold the phone; pick the angle manually. For automatic rotation and image filters use the webcam mode |
+
+- **Quality is applied on the phone** (resolution cap + bitrate); enlarging the scrcpy window adds no detail. scrcpy does not adapt to the connection, so if Wi-Fi stutters pick *Smooth*.
+- **Wireless:** pair once under **＋ Wireless connection**. Public or guest Wi-Fi usually isolates devices from each other, so pairing times out there — use USB.
+- **scrcpy window shortcuts** (click the window first): Alt+←/→ rotate, Alt+F fullscreen, Alt+G original size, Alt+W remove black borders, Alt+O turn the phone screen off.
+- **OBS:** add a **Window Capture** of `[scrcpy.exe]: FaceCam Screen` with capture method *Windows 10 (1903 and up)*. OBS captures the window at its on-screen size, so make it as large as possible (fullscreen).
+
+**Security.** The control page starts adb/scrcpy processes, so it listens on **127.0.0.1 only**, on its own port — not 7070, because traffic from `adb reverse` also arrives as localhost. Every request must carry a loopback `Host`, and state-changing requests must come from the page itself (`Origin` / `Sec-Fetch-Site` checks, JSON only). If port 7071 is busy the server prints a warning and the webcam keeps working.
+
 ---
 
 ## Configuration
@@ -384,8 +410,9 @@ Zoom and Meet do exactly the same thing — they mirror your self-view but send 
 |---|---|---|
 | 7070 | HTTP | USB mode, viewer on the PC, OBS |
 | 7443 | HTTPS | WiFi mode (needs the certificate) |
+| 7071 | HTTP, 127.0.0.1 only | Phone screen control page (scrcpy) |
 
-Override with `PORT` and `HTTPS_PORT`.
+Override with `PORT`, `HTTPS_PORT` and `SCREEN_PORT`.
 
 ---
 
